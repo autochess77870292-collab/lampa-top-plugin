@@ -1,8 +1,8 @@
-// main.js — Плагин "Мой топ" для Lampa (v21) — ДИАГНОСТИКА API
+// main.js — Плагин "Мой топ" для Lampa (v22) — ДИАГНОСТИКА URL
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v21';
+    var PLUGIN_NAME = 'my_top_v22';
     var STORAGE_KEY = 'my_movie_top_v14';
 
     function notify(msg) {
@@ -50,57 +50,80 @@
         notify('Импортировано: ' + added);
     }
 
-    // ============ ДИАГНОСТИКА ============
-    function diagCard(id) {
-        if (!window.Lampa || !Lampa.Api) { notify('нет Lampa.Api'); return; }
-        var tmdb = Lampa.Api.sources && Lampa.Api.sources.tmdb;
-        if (!tmdb) { notify('нет sources.tmdb'); return; }
+    // ============ ДИАГНОСТИКА 2 ============
+    function shortInfo(d) {
+        if (d === undefined || d === null) return 'null/undefined';
+        if (typeof d === 'string') return 'str:' + d.slice(0, 60);
+        if (typeof d === 'object') {
+            if (d.title) return 'title=' + d.title;
+            if (d.name) return 'name=' + d.name;
+            if (d.results) return 'results[' + d.results.length + ']';
+            if (d.movie) return 'movie=' + (d.movie.title || d.movie.name);
+            return 'keys:' + Object.keys(d).slice(0, 6).join(',');
+        }
+        return typeof d;
+    }
 
-        notify('Тест ID ' + id);
+    function diag() {
+        if (!window.Lampa || !Lampa.Api || !Lampa.Api.sources) { notify('нет API'); return; }
+        var tmdb = Lampa.Api.sources.tmdb;
+        if (!tmdb || !tmdb.main) { notify('нет tmdb.main'); return; }
 
-        // Способ 1: tmdb.get('movie/155')
+        notify('Тест main...');
+
+        // 1. main({url: 'movie/155'})
         setTimeout(function () {
             try {
-                tmdb.get('movie/' + id, function (d) {
-                    notify('1 get(movie/): ' + (d && (d.title || d.name) ? d.title || d.name : 'пусто'));
-                }, function (e) { notify('1 get(movie/) ERR: ' + (e && e.message ? e.message : e)); });
+                tmdb.main({ url: 'movie/155' }, function (d) {
+                    notify('1 {url}: ' + shortInfo(d));
+                }, function (e) { notify('1 ERR: ' + shortInfo(e)); });
             } catch (e) { notify('1 throw: ' + e.message); }
         }, 100);
 
-        // Способ 2: tmdb.get('3/movie/155')
+        // 2. main({url: '/movie/155'})
         setTimeout(function () {
             try {
-                tmdb.get('3/movie/' + id, function (d) {
-                    notify('2 get(3/movie/): ' + (d && (d.title || d.name) ? d.title || d.name : 'пусто'));
-                }, function (e) { notify('2 get(3/movie/) ERR: ' + (e && e.message ? e.message : e)); });
+                tmdb.main({ url: '/movie/155' }, function (d) {
+                    notify('2 {url /}: ' + shortInfo(d));
+                }, function (e) { notify('2 ERR: ' + shortInfo(e)); });
             } catch (e) { notify('2 throw: ' + e.message); }
         }, 2700);
 
-        // Способ 3: tmdb.full({id, method:'movie'})
+        // 3. main('movie/155')
         setTimeout(function () {
             try {
-                tmdb.full({ id: id, method: 'movie' }, function (d) {
-                    notify('3 full: ' + (d && (d.title || d.name) ? d.title || d.name : 'пусто'));
-                }, function (e) { notify('3 full ERR: ' + (e && e.message ? e.message : e)); });
+                tmdb.main('movie/155', function (d) {
+                    notify('3 str: ' + shortInfo(d));
+                }, function (e) { notify('3 ERR: ' + shortInfo(e)); });
             } catch (e) { notify('3 throw: ' + e.message); }
         }, 5300);
 
-        // Способ 4: Lampa.Api.full
+        // 4. main({url: 'movie/155', language: 'ru'})
         setTimeout(function () {
             try {
-                Lampa.Api.full({ id: id, method: 'movie' }, function (d) {
-                    notify('4 Api.full: ' + (d && (d.title || d.name) ? d.title || d.name : 'пусто'));
-                }, function (e) { notify('4 Api.full ERR: ' + (e && e.message ? e.message : e)); });
+                tmdb.main({ url: 'movie/155', language: 'ru' }, function (d) {
+                    notify('4 +lang: ' + shortInfo(d));
+                }, function (e) { notify('4 ERR: ' + shortInfo(e)); });
             } catch (e) { notify('4 throw: ' + e.message); }
         }, 7900);
 
-        // Способ 5: узнать URL источника
+        // 5. full({id: 155, method: 'movie', card: {}})
         setTimeout(function () {
             try {
-                var info = tmdb.main ? 'есть main' : 'нет main';
-                notify('tmdb ключи: ' + Object.keys(tmdb).slice(0, 8).join(','));
+                tmdb.full({ id: 155, method: 'movie', card: {} }, function (d) {
+                    notify('5 full+card: ' + shortInfo(d));
+                }, function (e) { notify('5 ERR: ' + shortInfo(e)); });
             } catch (e) { notify('5 throw: ' + e.message); }
         }, 10500);
+
+        // 6. main с callback-ом err в 4-м аргументе
+        setTimeout(function () {
+            try {
+                tmdb.main({ url: 'movie/155' }, function (d) {
+                    notify('6 cb4: ' + shortInfo(d));
+                }, false, function (e) { notify('6 ERR: ' + shortInfo(e)); });
+            } catch (e) { notify('6 throw: ' + e.message); }
+        }, 13100);
     }
 
     // ============ КОМПОНЕНТ ============
@@ -118,8 +141,8 @@
             btnImport.on('hover:enter click', function () { importFavorites(); buildContent(); });
             buttons.append(btnImport);
 
-            var btnDiag = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Тест TMDB</span></div>');
-            btnDiag.on('hover:enter click', function () { diagCard(155); });
+            var btnDiag = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Тест main</span></div>');
+            btnDiag.on('hover:enter click', function () { diag(); });
             buttons.append(btnDiag);
 
             var btnClear = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Очистить</span></div>');
@@ -220,7 +243,7 @@
         registerComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
-        notify('Плагин "Мой топ" v21 запущен');
+        notify('Плагин "Мой топ" v22 запущен');
     }
 
     if (window.appready) startPlugin();

@@ -1,8 +1,8 @@
-// main.js — Плагин "Мой топ" для Lampa (v25)
+// main.js — Плагин "Мой топ" для Lampa (v26)
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v25';
+    var PLUGIN_NAME = 'my_top_v26';
     var STORAGE_KEY = 'my_movie_top_v14';
 
     function notify(msg) {
@@ -19,6 +19,16 @@
         return (p && typeof p === 'object') ? p : {};
     }
     function saveTop(t) { return rawSet(STORAGE_KEY, JSON.stringify(t)); }
+
+    // Защита от перехвата клавиш Lampa (Backspace, стрелки и т.д.)
+    function shieldInput($el) {
+        $el.on('keydown keyup keypress input', function (e) {
+            e.stopPropagation();
+        });
+        $el.on('focus', function () { window.__mytop_input_active = true; });
+        $el.on('blur', function () { window.__mytop_input_active = false; });
+        return $el;
+    }
 
     function isSeries(c) { return !!(c && (c.name || c.first_air_date || c.media_type === 'tv')); }
     function extractCardInfo(card) {
@@ -126,6 +136,55 @@
         next();
     }
 
+    // ============ ПЕРЕМЕЩЕНИЕ ============
+    function getSortedIds() {
+        var top = getTop();
+        var ids = Object.keys(top);
+        ids.sort(function (a, b) {
+            var A = top[a], B = top[b];
+            if (A.place && B.place) return A.place - B.place;
+            if (A.place) return -1;
+            if (B.place) return 1;
+            return (A.addedAt || 0) - (B.addedAt || 0);
+        });
+        return ids;
+    }
+
+    function moveUp(id) {
+        var ids = getSortedIds();
+        var idx = ids.indexOf(String(id));
+        if (idx <= 0) return;
+        var top = getTop();
+        var prevId = ids[idx - 1];
+        var tmpPlace = top[id].place;
+        top[id].place = top[prevId].place;
+        top[prevId].place = tmpPlace;
+        if (top[id].place === null && top[prevId].place === null) {
+            // оба без места — обмениваем addedAt, чтобы swap был устойчив
+            var tmpT = top[id].addedAt;
+            top[id].addedAt = top[prevId].addedAt;
+            top[prevId].addedAt = tmpT;
+        }
+        saveTop(top);
+    }
+
+    function moveDown(id) {
+        var ids = getSortedIds();
+        var idx = ids.indexOf(String(id));
+        if (idx < 0 || idx >= ids.length - 1) return;
+        var top = getTop();
+        var nextId = ids[idx + 1];
+        var tmpPlace = top[id].place;
+        top[id].place = top[nextId].place;
+        top[nextId].place = tmpPlace;
+        if (top[id].place === null && top[nextId].place === null) {
+            var tmpT = top[id].addedAt;
+            top[id].addedAt = top[nextId].addedAt;
+            top[nextId].addedAt = tmpT;
+        }
+        saveTop(top);
+    }
+
     // ============ КОПИРОВАНИЕ ============
     function copyToClipboard(text, onOk, onFail) {
         try {
@@ -150,21 +209,18 @@
         } catch (e) { onFail(); }
     }
 
-    function buildTopText() {
+    function buildTopText(withNotes) {
         var top = getTop();
-        var items = Object.keys(top).map(function (id) { return top[id]; });
-        items.sort(function (a, b) {
-            if (a.place && b.place) return a.place - b.place;
-            if (a.place) return -1;
-            if (b.place) return 1;
-            return (a.addedAt || 0) - (b.addedAt || 0);
-        });
-        var lines = ['Мой топ (' + items.length + '):', ''];
-        items.forEach(function (it, i) {
+        var ids = getSortedIds();
+        var lines = ['Мой топ (' + ids.length + '):', ''];
+        ids.forEach(function (id, i) {
+            var it = top[id];
             var num = it.place || (i + 1);
             var line = num + '. ' + it.title + ' (' + it.year + ')' + (it.isSeries ? ' [сериал]' : '');
-            if (it.note) line += ' — ' + it.note;
             lines.push(line);
+            if (withNotes && it.note) {
+                lines.push('   Заметка: ' + it.note);
+            }
         });
         return lines.join('\n');
     }
@@ -191,6 +247,7 @@
                 fontSize: '14px', fontFamily: 'inherit', outline: 'none', resize: 'vertical',
                 boxSizing: 'border-box'
             }).val(note);
+            shieldInput(ta);
             var btnRow = $('<div>').css({ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'flex-end' });
             var btnCancel = $('<div class="full-start__button selector"><span>Отмена</span></div>');
             var btnSave = $('<div class="full-start__button selector"><span>Сохранить</span></div>');
@@ -198,6 +255,9 @@
             box.append(header).append(ta).append(btnRow);
             modal.append(box);
             $('body').append(modal);
+
+            // Блокируем Lampa-навигацию пока открыта модалка
+            modal.on('keydown keyup keypress', function (e) { e.stopPropagation(); });
 
             btnCancel.on('click', function () { modal.remove(); });
             btnSave.on('click', function () {
@@ -208,6 +268,8 @@
                 notify('Заметка сохранена');
                 if (onDone) onDone();
             });
+
+            setTimeout(function () { ta.focus(); }, 100);
         } catch (e) {
             console.error('[MyTop] editNote err:', e);
             notify('Ошибка заметки');
@@ -236,6 +298,7 @@
                 border: '1px solid #2c2c34', borderRadius: '8px', padding: '10px',
                 fontSize: '16px', outline: 'none', boxSizing: 'border-box'
             }).val(curPlace);
+            shieldInput(inp);
             var hint = $('<div>').css({ color: '#8a8a95', fontSize: '12px', marginTop: '8px' }).text('Пусто — без места');
             var btnRow = $('<div>').css({ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'flex-end' });
             var btnCancel = $('<div class="full-start__button selector"><span>Отмена</span></div>');
@@ -244,6 +307,8 @@
             box.append(header).append(inp).append(hint).append(btnRow);
             modal.append(box);
             $('body').append(modal);
+
+            modal.on('keydown keyup keypress', function (e) { e.stopPropagation(); });
 
             btnCancel.on('click', function () { modal.remove(); });
             btnSave.on('click', function () {
@@ -256,6 +321,8 @@
                 modal.remove();
                 if (onDone) onDone();
             });
+
+            setTimeout(function () { inp.focus(); }, 100);
         } catch (e) {
             console.error('[MyTop] editPlace err:', e);
             notify('Ошибка места');
@@ -391,7 +458,7 @@
             try {
                 html.empty();
                 var top = getTop();
-                var ids = Object.keys(top);
+                var ids = getSortedIds();
 
                 var buttons = $('<div style="display:flex;gap:8px;padding:20px 20px 12px;flex-wrap:wrap;"></div>');
 
@@ -401,7 +468,7 @@
 
                 var btnCopy = $('<div class="full-start__button selector" style="flex:1;min-width:120px;"><span>Копировать</span></div>');
                 btnCopy.on('hover:enter click', function () {
-                    var text = buildTopText();
+                    var text = buildTopText(true);
                     copyToClipboard(text,
                         function () { notify('Топ скопирован'); },
                         function () { notify('Не удалось скопировать'); }
@@ -422,21 +489,39 @@
                     return;
                 }
 
-                var items = ids.map(function (id) { return top[id]; });
-                items.sort(function (a, b) {
-                    if (a.place && b.place) return a.place - b.place;
-                    if (a.place) return -1;
-                    if (b.place) return 1;
-                    return (a.addedAt || 0) - (b.addedAt || 0);
-                });
-
                 var list = $('<div style="padding:0 20px 120px;"></div>');
 
-                items.forEach(function (item) {
+                ids.forEach(function (id, i) {
+                    var item = top[id];
                     var placeText = item.place ? '#' + item.place : '—';
                     var poster = item.poster ? 'https://image.tmdb.org/t/p/w200' + item.poster : '';
 
-                    var row = $('<div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.06);"></div>');
+                    var row = $('<div style="display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.06);"></div>');
+
+                    // Стрелки вверх/вниз
+                    var arrows = $('<div>').css({ display: 'flex', flexDirection: 'column', gap: '2px' });
+                    var upBtn = $('<div>').css({
+                        color: i === 0 ? '#3a3a44' : '#ffdd55', fontSize: '16px',
+                        cursor: i === 0 ? 'default' : 'pointer', textAlign: 'center', userSelect: 'none',
+                        lineHeight: '1', padding: '2px 6px'
+                    }).text('▲');
+                    var downBtn = $('<div>').css({
+                        color: i === ids.length - 1 ? '#3a3a44' : '#ffdd55', fontSize: '16px',
+                        cursor: i === ids.length - 1 ? 'default' : 'pointer', textAlign: 'center', userSelect: 'none',
+                        lineHeight: '1', padding: '2px 6px'
+                    }).text('▼');
+                    upBtn.on('click', function () {
+                        if (i === 0) return;
+                        moveUp(item.id);
+                        buildContent();
+                    });
+                    downBtn.on('click', function () {
+                        if (i === ids.length - 1) return;
+                        moveDown(item.id);
+                        buildContent();
+                    });
+                    arrows.append(upBtn).append(downBtn);
+                    row.append(arrows);
 
                     var placeBtn = $('<div>').css({
                         fontSize: '22px', fontWeight: '700', color: '#ffdd55',
@@ -555,7 +640,7 @@
             registerComponent();
             Lampa.Listener.follow('full', addButtonToFull);
             addMenuItem();
-            notify('Плагин "Мой топ" v25 запущен');
+            notify('Плагин "Мой топ" v26 запущен');
         } catch (e) { console.error('[MyTop] start err:', e); }
     }
 

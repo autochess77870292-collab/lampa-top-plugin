@@ -1,13 +1,13 @@
-// main.js — Плагин "Мой топ" для Lampa (v2)
-// Берёт фильмы из раздела "Избранное", строит отдельную страницу с сортировкой.
+// main.js — Плагин "Мой топ" для Lampa (v3)
+// Поддержка фильмов и сериалов. Берёт данные из раздела "Избранное".
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_plugin_v2';
+    var PLUGIN_NAME = 'my_top_plugin_v3';
     var STORAGE_KEY = 'my_movie_top';
 
     // ========================
-    // 1. БЕЗОПАСНЫЕ ВЫЗОВЫ
+    // 1. УТИЛИТЫ
     // ========================
     function notify(msg) {
         try {
@@ -42,30 +42,56 @@
         }
     }
 
+    // Определяем, сериал это или фильм
+    function isSeries(card) {
+        return !!(card && (
+            card.name ||
+            card.first_air_date ||
+            card.media_type === 'tv' ||
+            card.number_of_seasons !== undefined
+        ));
+    }
+
+    // Универсально достаём название, год, постер — работает и для фильмов, и для сериалов
+    function extractCardInfo(card) {
+        if (!card) return null;
+        var isTV = isSeries(card);
+
+        var title = isTV
+            ? (card.name || card.original_name || 'Без названия')
+            : (card.title || card.original_title || 'Без названия');
+
+        var dateStr = isTV
+            ? (card.first_air_date || '')
+            : (card.release_date || '');
+
+        var year = dateStr ? dateStr.split('-')[0] : '—';
+
+        return {
+            id: card.id,
+            title: title,
+            year: year,
+            poster: card.poster_path || '',
+            isSeries: isTV,
+            addedAt: Date.now()
+        };
+    }
+
     // ========================
-    // 2. ЧТЕНИЕ ИЗБРАННОГО ИЗ LAMPA
+    // 2. ЧТЕНИЕ ИЗБРАННОГО
     // ========================
-    // Lampa хранит избранное в localStorage под ключом 'favorite'.
-    // Формат примерно такой:
-    // { "like": [123, 456], "book": [789], "wath": [...], "history": [...] }
-    // Точный формат нужно проверить на твоём устройстве.
     function getFavorites() {
         var raw = safeGet('favorite', '{}');
         var parsed;
 
-        // Пробуем распарсить, если это строка
         if (typeof raw === 'string') {
             try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }
         } else {
             parsed = raw;
         }
 
-        if (!parsed || typeof parsed !== 'object') {
-            console.warn('[MyTop] Не удалось прочитать избранное. raw =', raw);
-            return [];
-        }
+        if (!parsed || typeof parsed !== 'object') return [];
 
-        // Собираем все ID из всех категорий
         var allIds = [];
         Object.keys(parsed).forEach(function (category) {
             var val = parsed[category];
@@ -75,12 +101,11 @@
                 });
             }
         });
-
         return allIds;
     }
 
     // ========================
-    // 3. РАБОТА С ТОПОМ (локальное хранилище плагина)
+    // 3. ХРАНИЛИЩЕ ТОПА
     // ========================
     function getTop() {
         var data = safeGet(STORAGE_KEY, '{}');
@@ -94,47 +119,39 @@
         safeSet(STORAGE_KEY, JSON.stringify(top));
     }
 
-    // Фильм в топе? (id -> { place, title })
     function isInTop(movieId) {
         var top = getTop();
         return !!top[movieId];
     }
 
-    // Добавить в топ без места (place = null)
-    function addToTop(movie) {
-        if (!movie || !movie.id) {
-            notify('Не удалось определить фильм');
+    function addToTop(card) {
+        var info = extractCardInfo(card);
+        if (!info || !info.id) {
+            notify('Не удалось определить фильм или сериал');
             return;
         }
         var top = getTop();
-        if (top[movie.id]) {
-            notify('Этот фильм уже в топе');
+        if (top[info.id]) {
+            notify('Этот уже в топе');
             return;
         }
-        top[movie.id] = {
-            id: movie.id,
-            title: movie.title || 'Без названия',
-            year: movie.release_date ? movie.release_date.split('-')[0] : '—',
-            poster: movie.poster_path || '',
-            place: null,          // ← изначально места нет, будет прочерк
-            addedAt: Date.now()
-        };
+        top[info.id] = info;
+        top[info.id].place = null; // изначально места нет
         saveTop(top);
-        notify('"' + (movie.title || 'Фильм') + '" добавлен в топ');
+        notify('"' + info.title + '" добавлен в топ');
     }
 
     // ========================
-    // 4. СТРАНИЦА "МОЙ ТОП" (отдельный экран)
+    // 4. ОТРИСОВКА СТРАНИЦЫ ТОПА
     // ========================
     function renderTopPage() {
         var top = getTop();
         var ids = Object.keys(top);
 
         if (ids.length === 0) {
-            return '<div class="my-top-empty">Топ пока пуст. Добавь фильмы через кнопку на карточке.</div>';
+            return '<div class="my-top-empty">Топ пока пуст.<br>Добавь фильмы или сериалы кнопкой на карточке.</div>';
         }
 
-        // Сортируем: сначала с местом (по возрастанию), потом без места (по дате добавления)
         var items = ids.map(function (id) { return top[id]; });
         items.sort(function (a, b) {
             if (a.place && b.place) return a.place - b.place;
@@ -149,33 +166,39 @@
             var poster = item.poster
                 ? 'https://image.tmdb.org/t/p/w200' + item.poster
                 : '';
+            var badge = item.isSeries
+                ? '<span class="my-top-badge">СЕРИАЛ</span>'
+                : '';
+
             html += '<div class="my-top-item">' +
                 '<div class="my-top-place">' + placeText + '</div>' +
                 (poster ? '<div class="my-top-poster"><img src="' + poster + '" alt=""></div>' : '') +
                 '<div class="my-top-info">' +
-                '<div class="my-top-title">' + item.title + '</div>' +
+                '<div class="my-top-title">' + item.title + badge + '</div>' +
                 '<div class="my-top-year">' + item.year + '</div>' +
                 '</div>' +
                 '</div>';
         });
         html += '</div>';
 
-        // Стили (инжектим один раз)
         html += '<style>' +
-            '.my-top-empty{padding:40px;text-align:center;color:#8a8a95;font-size:15px;}' +
+            '.my-top-empty{padding:40px;text-align:center;color:#8a8a95;font-size:15px;line-height:1.6;}' +
             '.my-top-list{display:flex;flex-direction:column;gap:10px;padding:16px;}' +
             '.my-top-item{display:flex;align-items:center;gap:12px;background:#1c1c22;border-radius:10px;padding:12px;}' +
             '.my-top-place{font-size:20px;font-weight:700;color:#3a6df0;min-width:40px;text-align:center;}' +
             '.my-top-poster img{width:50px;height:75px;object-fit:cover;border-radius:6px;}' +
             '.my-top-info{flex:1;min-width:0;}' +
             '.my-top-title{font-size:15px;font-weight:600;color:#e8e8ec;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+            '.my-top-badge{display:inline-block;margin-left:8px;padding:2px 6px;font-size:10px;font-weight:700;background:#3a6df0;color:#fff;border-radius:4px;vertical-align:middle;}' +
             '.my-top-year{font-size:13px;color:#8a8a95;margin-top:4px;}' +
             '</style>';
 
         return html;
     }
 
-    // Регистрируем компонент для страницы
+    // ========================
+    // 5. РЕГИСТРАЦИЯ КОМПОНЕНТА
+    // ========================
     function registerTopComponent() {
         if (!window.Lampa || !Lampa.Component || !Lampa.Component.add) {
             console.error('[MyTop] Lampa.Component.add недоступен');
@@ -188,9 +211,7 @@
                 this.html.html(renderTopPage());
                 return this.html;
             },
-            start: function () {
-                // можно обновить при входе
-            },
+            start: function () {},
             render: function () {
                 return this.html;
             }
@@ -216,20 +237,21 @@
     }
 
     // ========================
-    // 5. КНОПКА НА КАРТОЧКЕ ФИЛЬМА (со значком)
+    // 6. КНОПКА НА КАРТОЧКЕ (фильм или сериал)
     // ========================
     function addButtonToFull(e) {
         if (e.type !== 'complite') return;
         var movie = e.data && e.data.movie ? e.data.movie : null;
         if (!movie) return;
 
-        // Кнопка со SVG-звездой (значок вернул)
+        var label = isSeries(movie) ? 'В мой топ (сериал)' : 'В мой топ';
+
         var btn = $(
             '<div class="full-start__button view--custom">' +
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24px" height="24px">' +
             '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="currentColor"/>' +
             '</svg>' +
-            '<span>В мой топ</span>' +
+            '<span>' + label + '</span>' +
             '</div>'
         );
 
@@ -243,7 +265,7 @@
     }
 
     // ========================
-    // 6. ПУНКТ МЕНЮ
+    // 7. ПУНКТ МЕНЮ
     // ========================
     function addMenuItem() {
         var attempts = 0;
@@ -275,7 +297,7 @@
     }
 
     // ========================
-    // 7. ДИАГНОСТИКА ИЗБРАННОГО (для отладки)
+    // 8. ДИАГНОСТИКА
     // ========================
     function debugFavorites() {
         var raw = safeGet('favorite', '{}');
@@ -285,13 +307,13 @@
     }
 
     // ========================
-    // 8. ИНИЦИАЛИЗАЦИЯ
+    // 9. ИНИЦИАЛИЗАЦИЯ
     // ========================
     function startPlugin() {
         if (window[PLUGIN_NAME]) return;
         window[PLUGIN_NAME] = true;
 
-        console.log('[MyTop] Плагин v2 запущен');
+        console.log('[MyTop] Плагин v3 запущен (фильмы + сериалы)');
 
         window.addEventListener('error', function (e) {
             if (e.filename && e.filename.indexOf('main.js') !== -1) {
@@ -302,8 +324,6 @@
         registerTopComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
-
-        // Для отладки — вывести избранное в консоль
         setTimeout(debugFavorites, 3000);
     }
 

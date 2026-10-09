@@ -1,10 +1,10 @@
-// main.js — Плагин "Мой топ" для Lampa (v12)
-// Нативная страница через Lampa.Component (правильный конструктор).
+// main.js — Плагин "Мой топ" для Lampa (v13)
+// Импорт из "viewed" + метаданные из "card". Прокручиваемая диагностика.
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v12';
-    var STORAGE_KEY = 'my_movie_top_v12';
+    var PLUGIN_NAME = 'my_top_v13';
+    var STORAGE_KEY = 'my_movie_top_v13';
 
     function notify(msg) {
         try {
@@ -19,11 +19,16 @@
     function rawSet(key, val) {
         try { localStorage.setItem(key, val); return true; } catch (e) { return false; }
     }
+    function parseJSON(str, def) {
+        if (!str) return def;
+        try { var p = JSON.parse(str); return p || def; } catch (e) { return def; }
+    }
+
     function getTop() {
         var raw = rawGet(STORAGE_KEY, '');
         if (!raw) return {};
-        try { var p = JSON.parse(raw); return (p && typeof p === 'object') ? p : {}; }
-        catch (e) { return {}; }
+        var p = parseJSON(raw, {});
+        return (p && typeof p === 'object') ? p : {};
     }
     function saveTop(top) { return rawSet(STORAGE_KEY, JSON.stringify(top)); }
 
@@ -33,13 +38,19 @@
     function extractCardInfo(card) {
         if (!card) return null;
         var isTV = isSeries(card);
-        var title = isTV ? (card.name || 'Без названия') : (card.title || 'Без названия');
+        var title = isTV ? (card.name || card.original_name || 'Без названия') : (card.title || card.original_title || 'Без названия');
         var dateStr = isTV ? (card.first_air_date || '') : (card.release_date || '');
         return {
-            id: card.id, title: title, year: dateStr ? dateStr.split('-')[0] : '—',
-            poster: card.poster_path || '', isSeries: isTV, place: null, addedAt: Date.now()
+            id: card.id,
+            title: title,
+            year: dateStr ? dateStr.split('-')[0] : '—',
+            poster: card.poster_path || '',
+            isSeries: isTV,
+            place: null,
+            addedAt: Date.now()
         };
     }
+
     function addToTop(card) {
         var info = extractCardInfo(card);
         if (!info || !info.id) { notify('⚠ Не удалось определить карточку'); return; }
@@ -50,25 +61,68 @@
         notify('✔ "' + info.title + '" → в топе (' + Object.keys(top).length + ')');
     }
 
+    // ============ ИМПОРТ ИЗ "ИЗБРАННОГО" ============
     function importFavorites() {
-        var raw = rawGet('favorite', '');
-        if (!raw) { notify('Ключ favorite пуст'); return; }
-        var data;
-        try { data = JSON.parse(raw); } catch (e) { notify('favorite не JSON'); return; }
-        if (!data || typeof data !== 'object') { notify('favorite не объект'); return; }
-        var report = [];
-        Object.keys(data).forEach(function (k) {
-            var v = data[k];
-            var count = Array.isArray(v) ? v.length : (typeof v === 'object' ? Object.keys(v).length : 0);
-            report.push(k + ':' + count);
+        var fav = parseJSON(rawGet('favorite', ''), null);
+        if (!fav) { notify('Ключ favorite не найден или пуст'); return; }
+
+        // Берём категорию "viewed" (просмотрено)
+        var viewedIds = fav.viewed;
+        if (!viewedIds) { notify('Нет категории viewed'); return; }
+
+        // viewed может быть массивом или объектом
+        var ids = Array.isArray(viewedIds) ? viewedIds : Object.keys(viewedIds);
+        if (ids.length === 0) { notify('viewed пуст'); return; }
+
+        // Пробуем получить полные карточки из ключа "card"
+        var cards = parseJSON(rawGet('card', ''), {});
+        var hasCards = cards && typeof cards === 'object' && Object.keys(cards).length > 0;
+
+        var top = getTop();
+        var added = 0;
+        var withMeta = 0;
+
+        ids.forEach(function (id) {
+            var sid = String(id);
+            if (top[sid]) return;
+
+            var info;
+            // card может быть: { "12345": {title: ...}, ... } — ищем по ID
+            var rawCard = hasCards ? (cards[sid] || cards[id]) : null;
+
+            if (rawCard && (rawCard.title || rawCard.name)) {
+                info = extractCardInfo(rawCard);
+                if (info) withMeta++;
+            }
+
+            if (!info) {
+                info = {
+                    id: id,
+                    title: 'ID ' + id,
+                    year: '—',
+                    poster: '',
+                    isSeries: false,
+                    place: null,
+                    addedAt: Date.now()
+                };
+            }
+
+            info.id = id; // всегда оригинальный ID
+            info.place = null;
+            info.addedAt = Date.now();
+
+            top[sid] = info;
+            added++;
         });
-        notify('favorite → ' + report.join(', '));
+
+        saveTop(top);
+        notify('Импортировано: ' + added + ' (с метаданными: ' + withMeta + ')');
     }
 
-    // ============ КОМПОНЕНТ (правильный конструктор) ============
+    // ============ КОМПОНЕНТ ============
     function MyTopComponent() {
         var self = this;
-        var html = $('<div class="my-top-page"></div>');
+        var html = $('<div class="my-top-page" style="height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;"></div>');
 
         function buildContent() {
             html.empty();
@@ -76,23 +130,16 @@
             var top = getTop();
             var ids = Object.keys(top);
 
-            // Шапка с кнопками (в стиле Lampa — как full-start__button)
-            var buttons = $('<div style="display:flex;flex-wrap:wrap;gap:8px;padding:20px;"></div>');
+            // Кнопки
+            var buttons = $('<div style="display:flex;flex-wrap:wrap;gap:8px;padding:20px 20px 12px;"></div>');
 
-            var btnImport = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>📥 Импорт из избранного</span></div>');
+            var btnImport = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>📥 Импорт (viewed)</span></div>');
             btnImport.on('hover:enter click', function () { importFavorites(); buildContent(); });
             buttons.append(btnImport);
 
-            var btnDiag = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>🔍 Все ключи</span></div>');
+            var btnDiag = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>🔍 Ключи</span></div>');
             btnDiag.on('hover:enter click', function () { showDiag(); });
             buttons.append(btnDiag);
-
-            var btnTest = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>🧪 Тест</span></div>');
-            btnTest.on('hover:enter click', function () {
-                addToTop({ id: 999999, title: 'Тестовый фильм', release_date: '2024-01-01' });
-                buildContent();
-            });
-            buttons.append(btnTest);
 
             var btnClear = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>🗑 Очистить</span></div>');
             btnClear.on('hover:enter click', function () {
@@ -106,14 +153,13 @@
 
             // Отладка
             html.append('<div style="margin:0 20px 20px;padding:12px;background:rgba(0,0,0,0.3);border-radius:8px;color:#8a8a95;font-size:12px;">' +
-                'Ключ: <code>' + STORAGE_KEY + '</code><br>Элементов: <b>' + ids.length + '</b></div>');
+                'Ключ: <code>' + STORAGE_KEY + '</code> · Элементов: <b>' + ids.length + '</b></div>');
 
             if (ids.length === 0) {
-                html.append('<div style="padding:40px;text-align:center;color:#8a8a95;">Список пуст</div>');
+                html.append('<div style="padding:40px;text-align:center;color:#8a8a95;">Список пуст. Нажми "📥 Импорт (viewed)".</div>');
                 return;
             }
 
-            // Список карточек
             var items = ids.map(function (id) { return top[id]; });
             items.sort(function (a, b) {
                 if (a.place && b.place) return a.place - b.place;
@@ -122,7 +168,7 @@
                 return (a.addedAt || 0) - (b.addedAt || 0);
             });
 
-            var list = $('<div style="padding:0 20px 40px;"></div>');
+            var list = $('<div style="padding:0 20px 60px;"></div>');
 
             items.forEach(function (item) {
                 var placeText = item.place ? '#' + item.place : '—';
@@ -131,7 +177,7 @@
                 var row = $(
                     '<div style="display:flex;align-items:center;gap:14px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06);">' +
                     '<div style="font-size:22px;font-weight:700;color:#ffdd55;min-width:44px;text-align:center;">' + placeText + '</div>' +
-                    (poster ? '<img src="' + poster + '" style="width:54px;height:80px;object-fit:cover;border-radius:6px;">' : '') +
+                    (poster ? '<img src="' + poster + '" style="width:54px;height:80px;object-fit:cover;border-radius:6px;" onerror="this.style.display=\'none\'">' : '') +
                     '<div style="flex:1;min-width:0;">' +
                     '<div style="font-size:16px;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + item.title + (item.isSeries ? ' <span style="color:#ffdd55;font-size:11px;">СЕРИАЛ</span>' : '') + '</div>' +
                     '<div style="font-size:13px;color:#8a8a95;margin-top:4px;">' + (item.year || '—') + '</div>' +
@@ -151,22 +197,22 @@
             back.find('.full-start__button').on('hover:enter click', function () { buildContent(); });
             html.append(back);
 
-            var box = $('<div style="padding:0 20px 40px;font-family:monospace;font-size:11px;color:#e8e8ec;line-height:1.5;"></div>');
-            box.append('<div style="margin-bottom:12px;font-size:14px;">Всего ключей: ' + keys.length + '</div>');
+            html.append('<div style="padding:0 20px 12px;color:#8a8a95;font-size:13px;">Всего ключей: <b style="color:#fff;">' + keys.length + '</b></div>');
 
             keys.forEach(function (k) {
                 var val = localStorage.getItem(k) || '';
-                var preview = val.length > 400 ? val.substring(0, 400) + '...' : val;
+                var preview = val.length > 2000 ? val.substring(0, 2000) + '...' : val;
                 preview = preview.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                box.append(
-                    '<div style="margin-bottom:12px;padding:10px;background:rgba(0,0,0,0.35);border-radius:6px;">' +
+
+                var box = $(
+                    '<div style="margin:0 20px 12px;padding:10px;background:rgba(0,0,0,0.35);border-radius:6px;font-family:monospace;font-size:11px;">' +
                     '<div style="color:#ffdd55;font-weight:bold;word-break:break-all;">' + k + '</div>' +
                     '<div style="color:#6a6a75;margin:4px 0;">' + val.length + ' байт</div>' +
                     '<div style="color:#8a8a95;word-break:break-all;">' + preview + '</div>' +
                     '</div>'
                 );
+                html.append(box);
             });
-            html.append(box);
         }
 
         this.create = function () { buildContent(); return html; };
@@ -246,7 +292,7 @@
         registerComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
-        notify('⭐ Плагин "Мой топ" v12 запущен');
+        notify('⭐ Плагин "Мой топ" v13 запущен');
     }
 
     if (window.appready) startPlugin();

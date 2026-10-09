@@ -1,11 +1,10 @@
-// main.js — Плагин "Мой топ" для Lampa (v14)
-// Обогащение через Lampa.Api.movie + понятная диагностика.
+// main.js — Плагин "Мой топ" для Lampa (v15)
+// Кнопки без эмодзи + диагностика Lampa.Api.
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v14';
-    var STORAGE_KEY = 'my_movie_top_v14';
-    var IMPORTED_FROM_V13 = 'my_movie_top_v13'; // переносим прошлый импорт
+    var PLUGIN_NAME = 'my_top_v15';
+    var STORAGE_KEY = 'my_movie_top_v14'; // сохраняем тот же ключ, чтобы фильмы не пропали
 
     function notify(msg) {
         try {
@@ -51,18 +50,16 @@
             addedAt: Date.now()
         };
     }
-
     function addToTop(card) {
         var info = extractCardInfo(card);
-        if (!info || !info.id) { notify('⚠ Не удалось определить карточку'); return; }
+        if (!info || !info.id) { notify('Не удалось определить карточку'); return; }
         var top = getTop();
         if (top[info.id]) { notify('Уже в топе'); return; }
         top[info.id] = info;
         saveTop(top);
-        notify('✔ "' + info.title + '" → в топе (' + Object.keys(top).length + ')');
+        notify('"' + info.title + '" → в топе (' + Object.keys(top).length + ')');
     }
 
-    // ============ ИМПОРТ ============
     function importFavorites() {
         var fav = parseJSON(rawGet('favorite', ''), null);
         if (!fav) { notify('favorite не найден'); return; }
@@ -83,27 +80,45 @@
             added++;
         });
         saveTop(top);
-        notify('Импортировано: ' + added + ' (из viewed)');
+        notify('Импортировано: ' + added);
     }
 
-    // Перенос данных из v13 (если есть)
-    function migrateFromV13() {
-        var oldRaw = rawGet(IMPORTED_FROM_V13, '');
-        if (!oldRaw) return;
-        var oldTop = parseJSON(oldRaw, {});
-        if (!oldTop || typeof oldTop !== 'object') return;
-        var newTop = getTop();
-        var moved = 0;
-        Object.keys(oldTop).forEach(function (k) {
-            if (!newTop[k]) { newTop[k] = oldTop[k]; moved++; }
-        });
-        if (moved > 0) {
-            saveTop(newTop);
-            notify('Перенесено из v13: ' + moved);
+    // ============ ДИАГНОСТИКА Lampa.Api ============
+    function diagApi() {
+        var lines = [];
+        if (!window.Lampa) { notify('Lampa нет'); return; }
+        if (!Lampa.Api) { notify('Lampa.Api НЕТ'); return; }
+
+        var apiKeys = Object.keys(Lampa.Api).sort();
+        lines.push('Lampa.Api: ' + apiKeys.join(', '));
+
+        if (Lampa.Api.sources) {
+            lines.push('Api.sources: ' + Object.keys(Lampa.Api.sources).join(', '));
         }
+
+        // Показываем первые 3 уведомления
+        notify('Api: ' + apiKeys.slice(0, 15).join(', '));
+
+        setTimeout(function () {
+            if (Lampa.Api.sources) {
+                notify('Api.sources: ' + Object.keys(Lampa.Api.sources).join(', '));
+            }
+        }, 2600);
+
+        setTimeout(function () {
+            // Пробуем tmdb источник
+            var tmdb = Lampa.Api.sources && Lampa.Api.sources.tmdb;
+            if (tmdb) {
+                notify('tmdb keys: ' + Object.keys(tmdb).slice(0, 15).join(', '));
+            } else {
+                notify('tmdb нет');
+            }
+        }, 5200);
+
+        console.log('[MyTop API]', lines.join('\n'));
     }
 
-    // ============ ОБОГАЩЕНИЕ ЧЕРЕЗ Lampa.Api ============
+    // ============ ОБОГАЩЕНИЕ (пока заглушка — выясняем API) ============
     function enrichTop(onDone) {
         var top = getTop();
         var ids = Object.keys(top);
@@ -112,68 +127,15 @@
             return item && item.title && item.title.indexOf('ID ') === 0;
         });
 
-        if (pending.length === 0) { notify('Все уже с метаданными'); if (onDone) onDone(); return; }
-        if (!window.Lampa || !Lampa.Api || !Lampa.Api.movie) {
-            notify('Lampa.Api.movie недоступен');
+        if (pending.length === 0) {
+            notify('Все уже с метаданными');
             if (onDone) onDone();
             return;
         }
 
-        notify('Загружаю метаданные: 0/' + pending.length);
-        var done = 0;
-        var index = 0;
-
-        function nextOne() {
-            if (index >= pending.length) {
-                saveTop(top);
-                notify('Готово: обновлено ' + done + ' из ' + pending.length);
-                if (onDone) onDone();
-                return;
-            }
-
-            var id = pending[index++];
-
-            function handleData(data) {
-                var card = null;
-                if (data) {
-                    if (data.movie) card = data.movie;
-                    else if (data.card) card = data.card;
-                    else if (data.id) card = data;
-                }
-                if (card && (card.title || card.name)) {
-                    var info = extractCardInfo(card);
-                    if (info) {
-                        info.id = top[id] ? top[id].id : id;
-                        info.place = null;
-                        info.addedAt = top[id] ? top[id].addedAt : Date.now();
-                        top[id] = info;
-                        done++;
-                    }
-                }
-                if (done % 5 === 0 || index === pending.length) {
-                    notify('Загружено: ' + index + '/' + pending.length);
-                }
-                setTimeout(nextOne, 100);
-            }
-
-            try {
-                // Пробуем movie — для фильмов, потом tv — если ничего не нашлось
-                Lampa.Api.movie(id, function (data) {
-                    if (data && (data.movie || data.card || data.id)) {
-                        handleData(data);
-                    } else {
-                        try {
-                            Lampa.Api.tv(id, function (data2) { handleData(data2); });
-                        } catch (e) { handleData(data); }
-                    }
-                });
-            } catch (e) {
-                console.error('[MyTop] enrich error:', e);
-                setTimeout(nextOne, 100);
-            }
-        }
-
-        nextOne();
+        notify('Нажми "Диагностика API", потом напиши разработчику');
+        diagApi();
+        if (onDone) onDone();
     }
 
     // ============ КОМПОНЕНТ ============
@@ -187,19 +149,19 @@
 
             var buttons = $('<div style="display:flex;flex-wrap:wrap;gap:8px;padding:20px 20px 12px;"></div>');
 
-            var btnImport = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>📥 Импорт (viewed)</span></div>');
+            var btnImport = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Импорт из избранного</span></div>');
             btnImport.on('hover:enter click', function () { importFavorites(); buildContent(); });
             buttons.append(btnImport);
 
-            var btnEnrich = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>🔄 Названия</span></div>');
+            var btnEnrich = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Загрузить названия</span></div>');
             btnEnrich.on('hover:enter click', function () { enrichTop(buildContent); });
             buttons.append(btnEnrich);
 
-            var btnDiag = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>🔍 Ключи</span></div>');
-            btnDiag.on('hover:enter click', function () { showDiag(); });
-            buttons.append(btnDiag);
+            var btnDiagApi = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Диагностика API</span></div>');
+            btnDiagApi.on('hover:enter click', function () { diagApi(); });
+            buttons.append(btnDiagApi);
 
-            var btnClear = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>🗑 Очистить</span></div>');
+            var btnClear = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Очистить</span></div>');
             btnClear.on('hover:enter click', function () {
                 saveTop({});
                 notify('Топ очищен');
@@ -243,41 +205,6 @@
             html.append(list);
         }
 
-        function showDiag() {
-            html.empty();
-
-            var back = $('<div style="padding:20px;"><div class="full-start__button selector" style="display:inline-block;"><span>← Назад</span></div></div>');
-            back.find('.full-start__button').on('hover:enter click', function () { buildContent(); });
-            html.append(back);
-
-            // Только ключи, связанные с фильмами — не все 266
-            var interesting = ['favorite', 'card', 'cards', 'history', 'viewed', 'like',
-                               'tmdb_cache', 'movie', 'tv', 'last', 'continues', 'bookmarks'];
-
-            var keys = Object.keys(localStorage).sort();
-            var relevant = keys.filter(function (k) {
-                var lk = k.toLowerCase();
-                return interesting.some(function (i) { return lk.indexOf(i) !== -1; });
-            });
-
-            html.append('<div style="padding:0 20px 12px;color:#8a8a95;font-size:13px;">' +
-                'Всего ключей: <b style="color:#fff;">' + keys.length + '</b> · ' +
-                'Относящихся к фильмам: <b style="color:#fff;">' + relevant.length + '</b></div>');
-
-            relevant.forEach(function (k) {
-                var val = localStorage.getItem(k) || '';
-                var preview = val.length > 1500 ? val.substring(0, 1500) + '...' : val;
-                preview = preview.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                html.append(
-                    '<div style="margin:0 20px 12px;padding:10px;background:rgba(0,0,0,0.35);border-radius:6px;font-family:monospace;font-size:11px;">' +
-                    '<div style="color:#ffdd55;font-weight:bold;word-break:break-all;">' + k + '</div>' +
-                    '<div style="color:#6a6a75;margin:4px 0;">' + val.length + ' байт</div>' +
-                    '<div style="color:#8a8a95;word-break:break-all;">' + preview + '</div>' +
-                    '</div>'
-                );
-            });
-        }
-
         this.create = function () { buildContent(); return html; };
         this.start = function () {};
         this.render = function () { return html; };
@@ -291,7 +218,7 @@
 
     function openTopPage() {
         try {
-            Lampa.Activity.push({ url: '', title: '⭐ Мой топ', component: 'my_top_page', data: {} });
+            Lampa.Activity.push({ url: '', title: 'Мой топ', component: 'my_top_page', data: {} });
         } catch (e) { notify('Ошибка открытия: ' + e.message); }
     }
 
@@ -329,7 +256,7 @@
             if (lists.length > 0) {
                 var first = lists.first();
                 if (first.find('.my-top-menu-item').length > 0) return;
-                var item = $('<li class="menu__item selector my-top-menu-item"><div class="menu__text">⭐ Мой топ</div></li>');
+                var item = $('<li class="menu__item selector my-top-menu-item"><div class="menu__text">Мой топ</div></li>');
                 item.on('click hover:enter', openTopPage);
                 first.append(item);
             } else if (attempts < maxAttempts) setTimeout(tryAdd, 500);
@@ -343,8 +270,7 @@
         registerComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
-        migrateFromV13();
-        notify('⭐ Плагин "Мой топ" v14 запущен');
+        notify('Плагин "Мой топ" v15 запущен');
     }
 
     if (window.appready) startPlugin();

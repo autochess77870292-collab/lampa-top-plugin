@@ -1,26 +1,37 @@
-// main.js — Плагин "Мой топ" для Lampa (v22) — ДИАГНОСТИКА URL
+// main.js — Плагин "Мой топ" для Lampa (v23)
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v22';
+    var PLUGIN_NAME = 'my_top_v23';
     var STORAGE_KEY = 'my_movie_top_v14';
 
     function notify(msg) {
         try { if (window.Lampa && Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show(msg); } catch (e) {}
-        console.log('[MyTop]', msg);
     }
     function rawGet(k, d) { try { var v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } }
     function rawSet(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
     function parseJSON(s, d) { if (!s) return d; try { var p = JSON.parse(s); return p || d; } catch (e) { return d; } }
-    function getTop() { var raw = rawGet(STORAGE_KEY, ''); if (!raw) return {}; var p = parseJSON(raw, {}); return (p && typeof p === 'object') ? p : {}; }
+
+    function getTop() {
+        var raw = rawGet(STORAGE_KEY, '');
+        if (!raw) return {};
+        var p = parseJSON(raw, {});
+        return (p && typeof p === 'object') ? p : {};
+    }
     function saveTop(t) { return rawSet(STORAGE_KEY, JSON.stringify(t)); }
+
     function isSeries(c) { return !!(c && (c.name || c.first_air_date || c.media_type === 'tv')); }
     function extractCardInfo(card) {
         if (!card) return null;
         var isTV = isSeries(card);
         var title = isTV ? (card.name || card.original_name || 'Без названия') : (card.title || card.original_title || 'Без названия');
         var dateStr = isTV ? (card.first_air_date || '') : (card.release_date || '');
-        return { id: card.id, title: title, year: dateStr ? dateStr.split('-')[0] : '—', poster: card.poster_path || '', isSeries: isTV, place: null, addedAt: Date.now() };
+        return {
+            id: card.id, title: title,
+            year: dateStr ? dateStr.split('-')[0] : '—',
+            poster: card.poster_path || '',
+            isSeries: isTV, place: null, addedAt: Date.now()
+        };
     }
     function addToTop(card) {
         var info = extractCardInfo(card);
@@ -31,6 +42,7 @@
         saveTop(top);
         notify('"' + info.title + '" → в топе (' + Object.keys(top).length + ')');
     }
+
     function importFavorites() {
         var fav = parseJSON(rawGet('favorite', ''), null);
         if (!fav) { notify('favorite не найден'); return; }
@@ -50,80 +62,73 @@
         notify('Импортировано: ' + added);
     }
 
-    // ============ ДИАГНОСТИКА 2 ============
-    function shortInfo(d) {
-        if (d === undefined || d === null) return 'null/undefined';
-        if (typeof d === 'string') return 'str:' + d.slice(0, 60);
-        if (typeof d === 'object') {
-            if (d.title) return 'title=' + d.title;
-            if (d.name) return 'name=' + d.name;
-            if (d.results) return 'results[' + d.results.length + ']';
-            if (d.movie) return 'movie=' + (d.movie.title || d.movie.name);
-            return 'keys:' + Object.keys(d).slice(0, 6).join(',');
+    // ============ TMDB ЧЕРЕЗ full ============
+    function fetchTMDB(id, onSuccess, onFail) {
+        var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
+        if (!tmdb || !tmdb.full) { onFail('нет tmdb.full'); return; }
+
+        var attempts = [
+            { id: id, method: 'movie', card: {} },
+            { id: id, method: 'tv', card: {} }
+        ];
+
+        var idx = 0;
+        function tryNext() {
+            if (idx >= attempts.length) { onFail('не найдено'); return; }
+            var params = attempts[idx++];
+            try {
+                tmdb.full(params, function (data) {
+                    if (data && (data.title || data.name || data.movie)) {
+                        onSuccess(data.movie || data);
+                    } else {
+                        tryNext();
+                    }
+                }, function () { tryNext(); });
+            } catch (e) { tryNext(); }
         }
-        return typeof d;
+        tryNext();
     }
 
-    function diag() {
-        if (!window.Lampa || !Lampa.Api || !Lampa.Api.sources) { notify('нет API'); return; }
-        var tmdb = Lampa.Api.sources.tmdb;
-        if (!tmdb || !tmdb.main) { notify('нет tmdb.main'); return; }
+    function enrichTop(onDone) {
+        var top = getTop();
+        var ids = Object.keys(top);
+        var pending = ids.filter(function (id) {
+            var item = top[id];
+            return item && item.title && item.title.indexOf('ID ') === 0;
+        });
+        if (!pending.length) { notify('Все уже с названиями'); if (onDone) onDone(); return; }
 
-        notify('Тест main...');
+        notify('Загружаю: 0/' + pending.length);
+        var index = 0, ok = 0, fail = 0;
 
-        // 1. main({url: 'movie/155'})
-        setTimeout(function () {
-            try {
-                tmdb.main({ url: 'movie/155' }, function (d) {
-                    notify('1 {url}: ' + shortInfo(d));
-                }, function (e) { notify('1 ERR: ' + shortInfo(e)); });
-            } catch (e) { notify('1 throw: ' + e.message); }
-        }, 100);
-
-        // 2. main({url: '/movie/155'})
-        setTimeout(function () {
-            try {
-                tmdb.main({ url: '/movie/155' }, function (d) {
-                    notify('2 {url /}: ' + shortInfo(d));
-                }, function (e) { notify('2 ERR: ' + shortInfo(e)); });
-            } catch (e) { notify('2 throw: ' + e.message); }
-        }, 2700);
-
-        // 3. main('movie/155')
-        setTimeout(function () {
-            try {
-                tmdb.main('movie/155', function (d) {
-                    notify('3 str: ' + shortInfo(d));
-                }, function (e) { notify('3 ERR: ' + shortInfo(e)); });
-            } catch (e) { notify('3 throw: ' + e.message); }
-        }, 5300);
-
-        // 4. main({url: 'movie/155', language: 'ru'})
-        setTimeout(function () {
-            try {
-                tmdb.main({ url: 'movie/155', language: 'ru' }, function (d) {
-                    notify('4 +lang: ' + shortInfo(d));
-                }, function (e) { notify('4 ERR: ' + shortInfo(e)); });
-            } catch (e) { notify('4 throw: ' + e.message); }
-        }, 7900);
-
-        // 5. full({id: 155, method: 'movie', card: {}})
-        setTimeout(function () {
-            try {
-                tmdb.full({ id: 155, method: 'movie', card: {} }, function (d) {
-                    notify('5 full+card: ' + shortInfo(d));
-                }, function (e) { notify('5 ERR: ' + shortInfo(e)); });
-            } catch (e) { notify('5 throw: ' + e.message); }
-        }, 10500);
-
-        // 6. main с callback-ом err в 4-м аргументе
-        setTimeout(function () {
-            try {
-                tmdb.main({ url: 'movie/155' }, function (d) {
-                    notify('6 cb4: ' + shortInfo(d));
-                }, false, function (e) { notify('6 ERR: ' + shortInfo(e)); });
-            } catch (e) { notify('6 throw: ' + e.message); }
-        }, 13100);
+        function next() {
+            if (index >= pending.length) {
+                saveTop(top);
+                notify('Готово. ОК: ' + ok + ', ошибок: ' + fail);
+                if (onDone) onDone();
+                return;
+            }
+            var id = pending[index++];
+            fetchTMDB(id, function (data) {
+                var info = extractCardInfo(data);
+                if (info && info.id) {
+                    var oldItem = top[id];
+                    info.id = oldItem.id;
+                    info.place = oldItem.place;
+                    info.addedAt = oldItem.addedAt;
+                    top[id] = info;
+                    ok++;
+                } else { fail++; }
+                if ((index % 10 === 0) || index === pending.length) {
+                    notify('Загружено: ' + index + '/' + pending.length + ' (ОК: ' + ok + ')');
+                }
+                setTimeout(next, 80);
+            }, function () {
+                fail++;
+                setTimeout(next, 80);
+            });
+        }
+        next();
     }
 
     // ============ КОМПОНЕНТ ============
@@ -141,9 +146,9 @@
             btnImport.on('hover:enter click', function () { importFavorites(); buildContent(); });
             buttons.append(btnImport);
 
-            var btnDiag = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Тест main</span></div>');
-            btnDiag.on('hover:enter click', function () { diag(); });
-            buttons.append(btnDiag);
+            var btnEnrich = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Загрузить названия</span></div>');
+            btnEnrich.on('hover:enter click', function () { enrichTop(buildContent); });
+            buttons.append(btnEnrich);
 
             var btnClear = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Очистить</span></div>');
             btnClear.on('hover:enter click', function () { saveTop({}); notify('Топ очищен'); buildContent(); });
@@ -243,7 +248,7 @@
         registerComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
-        notify('Плагин "Мой топ" v22 запущен');
+        notify('Плагин "Мой топ" v23 запущен');
     }
 
     if (window.appready) startPlugin();

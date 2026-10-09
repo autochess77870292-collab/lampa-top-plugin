@@ -1,10 +1,10 @@
-// main.js — Плагин "Мой топ" для Lampa (v9)
-// Исправления: SVG-иконка на кнопке, защита от двойного клика.
+// main.js — Плагин "Мой топ" для Lampa (v10)
+// v10: звезда-кнопка + диагностика localStorage + автопарсинг избранного.
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v9';
-    var STORAGE_KEY = 'my_movie_top_v9';
+    var PLUGIN_NAME = 'my_top_v10';
+    var STORAGE_KEY = 'my_movie_top_v10';
 
     function notify(msg) {
         try {
@@ -53,6 +53,80 @@
         notify(ok ? ('✔ "' + info.title + '" → в топе (' + Object.keys(top).length + ')') : '✖ Ошибка сохранения');
     }
 
+    // ============ ИМПОРТ ИЗ "ИЗБРАННОГО" LAMPA ============
+    // В Lampa ключ 'favorite' — это объект, где каждая категория это массив ID.
+    // Нам нужна категория, в которой 64 элемента (то, что пользователь видит как "Просмотрено").
+    // Точное имя категории мы определим по факту, поэтому пробуем всё сразу.
+    function importFavorites() {
+        var raw = rawGet('favorite', '');
+        if (!raw) { notify('Ключ favorite пуст'); return 0; }
+
+        var data;
+        try { data = JSON.parse(raw); } catch (e) { notify('favorite не JSON: ' + e.message); return 0; }
+        if (!data || typeof data !== 'object') { notify('favorite не объект'); return 0; }
+
+        // Категории, которые, вероятно, значат "просмотрено"
+        var candidates = ['viewed', 'wath', 'history', 'view', 'watched', 'seen'];
+        var found = null;
+        var report = [];
+        Object.keys(data).forEach(function (k) {
+            var v = data[k];
+            var count = Array.isArray(v) ? v.length : (typeof v === 'object' ? Object.keys(v).length : 0);
+            report.push(k + ':' + count);
+            if (candidates.indexOf(k) !== -1 && count > 0) found = k;
+        });
+
+        notify('Категории favorite: ' + report.join(', '));
+
+        if (!found) {
+            notify('Не нашёл категорию "просмотрено". Смотри диагностику.');
+            return 0;
+        }
+
+        var top = getTop();
+        var added = 0;
+        var ids = Array.isArray(data[found]) ? data[found] : Object.keys(data[found]);
+        ids.forEach(function (id) {
+            var sid = String(id);
+            if (!top[sid]) {
+                top[sid] = {
+                    id: id,
+                    title: 'ID ' + id + ' (нужно название)',
+                    year: '—',
+                    poster: '',
+                    isSeries: false,
+                    place: null,
+                    addedAt: Date.now()
+                };
+                added++;
+            }
+        });
+        saveTop(top);
+        notify('Импортировано из "' + found + '": ' + added);
+        return added;
+    }
+
+    // ============ ДИАГНОСТИКА localStorage ============
+    function buildDiagHTML() {
+        var keys = Object.keys(localStorage).sort();
+        var html = '<div style="padding:12px;color:#e8e8ec;font-family:monospace;font-size:11px;line-height:1.5;">';
+        html += '<div style="margin-bottom:12px;"><b style="font-size:14px;">Всего ключей: ' + keys.length + '</b></div>';
+
+        keys.forEach(function (k) {
+            var val = localStorage.getItem(k) || '';
+            var preview = val.length > 400 ? val.substring(0, 400) + '...' : val;
+            preview = preview.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            html += '<div style="margin-bottom:10px;padding:8px;background:#141418;border:1px solid #2c2c34;border-radius:6px;">';
+            html += '<div style="color:#3a6df0;font-weight:bold;">' + k + '</div>';
+            html += '<div style="color:#6a6a75;margin:4px 0;">Размер: ' + val.length + ' байт</div>';
+            html += '<div style="color:#8a8a95;word-break:break-all;">' + preview + '</div>';
+            html += '</div>';
+        });
+
+        html += '</div>';
+        return html;
+    }
+
     // ============ СТРАНИЦА ТОПА ============
     function renderTopPage() {
         var top = getTop();
@@ -61,16 +135,21 @@
 
         var debug = '<div class="my-top-debug"><b>Отладка</b><br>' +
             'Ключ: <code>' + STORAGE_KEY + '</code><br>' +
-            'Элементов: <b>' + ids.length + '</b><br>' +
-            'JSON:<div class="my-top-raw">' + rawJson.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div></div>';
+            'Элементов в топе: <b>' + ids.length + '</b>' +
+            '</div>';
 
-        var testBtns = '<div class="my-top-test-buttons">' +
-            '<div class="my-top-btn" id="my-top-test-add">🧪 Тестовый фильм</div>' +
+        var buttons =
+            '<div class="my-top-test-buttons">' +
+            '<div class="my-top-btn" id="my-top-test-import">📥 Импорт из избранного</div>' +
+            '<div class="my-top-btn" id="my-top-test-diag">🔍 Все ключи</div>' +
+            '</div>' +
+            '<div class="my-top-test-buttons">' +
+            '<div class="my-top-btn" id="my-top-test-add">🧪 Тестовый</div>' +
             '<div class="my-top-btn my-top-btn-danger" id="my-top-test-clear">🗑 Очистить</div>' +
             '</div>';
 
         if (ids.length === 0) {
-            return '<div class="my-top-page"><div class="my-top-empty">Список пуст.</div>' + testBtns + debug + '</div>';
+            return '<div class="my-top-page"><div class="my-top-empty">Список пуст.</div>' + buttons + debug + '</div>';
         }
 
         var items = ids.map(function (id) { return top[id]; });
@@ -96,7 +175,7 @@
         });
         list += '</div>';
 
-        return '<div class="my-top-page">' + list + testBtns + debug + '</div>';
+        return '<div class="my-top-page">' + list + buttons + debug + '</div>';
     }
 
     function pageStyles() {
@@ -111,16 +190,33 @@
             '.my-top-title{font-size:15px;font-weight:600;color:#e8e8ec;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
             '.my-top-badge{display:inline-block;margin-left:8px;padding:2px 6px;font-size:10px;font-weight:700;background:#3a6df0;color:#fff;border-radius:4px;vertical-align:middle;}' +
             '.my-top-year{font-size:13px;color:#8a8a95;margin-top:4px;}' +
-            '.my-top-test-buttons{display:flex;gap:10px;padding:16px;}' +
+            '.my-top-test-buttons{display:flex;gap:10px;padding:0 16px 12px;}' +
             '.my-top-btn{flex:1;padding:12px;background:#2c2c34;color:#e8e8ec;border-radius:8px;text-align:center;font-size:13px;cursor:pointer;}' +
             '.my-top-btn-danger{background:#5a2020;}' +
             '.my-top-debug{margin:16px;padding:12px;background:#141418;border:1px solid #2c2c34;border-radius:8px;color:#8a8a95;font-size:12px;line-height:1.6;}' +
-            '.my-top-raw{margin-top:6px;padding:8px;background:#0a0a0e;border-radius:4px;color:#6a6a75;font-family:monospace;font-size:11px;max-height:150px;overflow:auto;word-break:break-all;}' +
             '</style>';
+    }
+
+    function refreshPage() {
+        var wrapper = $('.my-top-page-wrapper');
+        if (wrapper.length) {
+            wrapper.html(renderTopPage() + pageStyles());
+            bindPageButtons();
+        }
     }
 
     function bindPageButtons() {
         setTimeout(function () {
+            $('#my-top-test-import').off('click').on('click', function () {
+                importFavorites();
+                refreshPage();
+            });
+            $('#my-top-test-diag').off('click').on('click', function () {
+                var wrapper = $('.my-top-page-wrapper');
+                var backBtn = '<div style="padding:12px;"><div class="my-top-btn" id="my-top-back">← Назад</div></div>';
+                wrapper.html(backBtn + buildDiagHTML());
+                $('#my-top-back').on('click', function () { refreshPage(); });
+            });
             $('#my-top-test-add').off('click').on('click', function () {
                 addToTop({ id: 999999, title: 'Тестовый фильм', release_date: '2024-01-01', poster_path: '' });
                 refreshPage();
@@ -131,19 +227,6 @@
                 notify('Топ очищен');
             });
         }, 100);
-    }
-
-    function refreshPage() {
-        if (window.Lampa && Lampa.Activity && Lampa.Activity.active) {
-            var act = Lampa.Activity.active();
-            if (act && act.component === 'my_top_page') {
-                var wrapper = $('.my-top-page-wrapper');
-                if (wrapper.length) {
-                    wrapper.html(renderTopPage() + pageStyles());
-                    bindPageButtons();
-                }
-            }
-        }
     }
 
     function registerTopComponent() {
@@ -168,39 +251,25 @@
         catch (e) { notify('Ошибка открытия'); }
     }
 
-    // ============ КНОПКА НА КАРТОЧКЕ (v9: SVG + защита от двойного клика) ============
-    function buildCardButton(label) {
-        // SVG-звезда с ЖЁСТКИМИ inline-размерами — Lampa CSS не сможет её сжать.
-        // viewBox подобран так, чтобы фигура занимала всё поле.
-        var svg =
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
-            'style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;">' +
-            '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
-            '</svg>';
-
-        return $(
-            '<div class="full-start__button selector view--custom my-top-btn-card" ' +
-            'style="display:flex;align-items:center;gap:0.5em;">' +
-            svg +
-            '<span style="white-space:nowrap;">' + label + '</span>' +
-            '</div>'
-        );
-    }
-
+    // ============ КНОПКА-ЗВЕЗДА НА КАРТОЧКЕ ============
     function addButtonToFull(e) {
         if (e.type !== 'complite') return;
 
         var movie = e.data && e.data.movie ? e.data.movie : null;
         if (!movie) return;
 
-        // Защита от повторного добавления (если complite приходит несколько раз)
         setTimeout(function () {
             if ($('.my-top-btn-card').length > 0) return;
 
-            var label = isSeries(movie) ? 'В мой топ (сериал)' : 'В мой топ';
-            var btn = buildCardButton(label);
+            var svg =
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
+                'style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;">' +
+                '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
+                '</svg>';
 
-            // Защита от двойного срабатывания: click + hover:enter на Android
+            var btn = $('<div class="full-start__button selector view--custom my-top-btn-card" ' +
+                'style="display:flex;align-items:center;justify-content:center;">' + svg + '</div>');
+
             var busy = false;
             btn.on('click', function () {
                 if (busy) return;
@@ -210,17 +279,12 @@
             });
 
             var container = $('.full-start__buttons');
-            if (container.length) {
-                container.append(btn);
-                return;
+            if (container.length) container.append(btn);
+            else {
+                var fb = $('.full-start-new__buttons');
+                if (fb.length) fb.append(btn);
+                else $('[class*="full-start"][class*="buttons"]').first().append(btn);
             }
-            var fallback = $('.full-start-new__buttons');
-            if (fallback.length) {
-                fallback.append(btn);
-                return;
-            }
-            var any = $('[class*="full-start"][class*="buttons"]').first();
-            if (any.length) any.append(btn);
         }, 200);
     }
 
@@ -241,7 +305,7 @@
         setTimeout(tryAdd, 1500);
     }
 
-    // ============ ИНИЦИАЛИЗАЦИЯ ============
+    // ============ СТАРТ ============
     function startPlugin() {
         if (window[PLUGIN_NAME]) return;
         window[PLUGIN_NAME] = true;
@@ -250,7 +314,7 @@
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
 
-        notify('⭐ Плагин "Мой топ" v9 запущен');
+        notify('⭐ Плагин "Мой топ" v10 запущен');
     }
 
     if (window.appready) startPlugin();

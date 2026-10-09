@@ -1,12 +1,11 @@
-// main.js — Плагин "Мой топ" для Lampa (v18)
-// Прямой запрос к TMDB API. Значок 2em.
+// main.js — Плагин "Мой топ" для Lampa (v19)
+// TMDB через Lampa.Reguest (обход CORS).
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v18';
+    var PLUGIN_NAME = 'my_top_v19';
     var STORAGE_KEY = 'my_movie_top_v14';
     var TMDB_KEY = '4ef0d7355d9ffb5151e987764708ce96';
-    var TMDB_BASE = 'https://api.themoviedb.org/3';
 
     function notify(msg) {
         try { if (window.Lampa && Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show(msg); } catch (e) {}
@@ -23,9 +22,7 @@
     }
     function saveTop(t) { return rawSet(STORAGE_KEY, JSON.stringify(t)); }
 
-    function isSeries(c) {
-        return !!(c && (c.name || c.first_air_date || c.media_type === 'tv'));
-    }
+    function isSeries(c) { return !!(c && (c.name || c.first_air_date || c.media_type === 'tv')); }
     function extractCardInfo(card) {
         if (!card) return null;
         var isTV = isSeries(card);
@@ -67,26 +64,33 @@
         notify('Импортировано: ' + added);
     }
 
-    // ============ TMDB ЗАПРОС ============
-    function fetchTMDB(id, onSuccess, onFail) {
-        var urlMovie = TMDB_BASE + '/movie/' + id + '?api_key=' + TMDB_KEY + '&language=ru';
-        var urlTV = TMDB_BASE + '/tv/' + id + '?api_key=' + TMDB_KEY + '&language=ru';
+    // ============ TMDB ЧЕРЕЗ Lampa.Reguest ============
+    function getReguest() {
+        if (window.Lampa && Lampa.Reguest) return new Lampa.Reguest();
+        if (window.Lampa && Lampa.Utils && Lampa.Utils.Reguest) return new Lampa.Utils.Reguest();
+        return null;
+    }
 
-        fetch(urlMovie).then(function (r) {
-            if (!r.ok) throw new Error('movie ' + r.status);
-            return r.json();
-        }).then(function (data) {
-            if (data && data.id && data.title) onSuccess(data);
-            else throw new Error('bad data');
-        }).catch(function () {
-            fetch(urlTV).then(function (r) {
-                if (!r.ok) throw new Error('tv ' + r.status);
-                return r.json();
-            }).then(function (data) {
-                if (data && data.id && data.name) onSuccess(data);
-                else onFail('tv bad data');
-            }).catch(function (e) { onFail(e.message); });
-        });
+    function fetchTMDB(id, onSuccess, onFail) {
+        var r = getReguest();
+        if (!r) { onFail('нет Lampa.Reguest'); return; }
+
+        var urlMovie = 'https://api.themoviedb.org/3/movie/' + id + '?api_key=' + TMDB_KEY + '&language=ru';
+        var urlTV = 'https://api.themoviedb.org/3/tv/' + id + '?api_key=' + TMDB_KEY + '&language=ru';
+
+        function tryMovie() {
+            r.get(urlMovie, function (data) {
+                if (data && data.id && data.title) { onSuccess(data); return; }
+                tryTV();
+            }, function () { tryTV(); });
+        }
+        function tryTV() {
+            r.get(urlTV, function (data) {
+                if (data && data.id && data.name) { onSuccess(data); return; }
+                onFail('нет данных');
+            }, function () { onFail('запрос не удался'); });
+        }
+        tryMovie();
     }
 
     function enrichTop(onDone) {
@@ -132,7 +136,6 @@
         next();
     }
 
-    // ============ КОМПОНЕНТ ============
     function MyTopComponent() {
         var html = $('<div class="my-top-page" style="height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;"></div>');
 
@@ -205,13 +208,11 @@
     }
 
     var STAR_SVG_CARD =
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
-        'style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;">' +
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;">' +
         '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
 
     var STAR_SVG_MENU =
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
-        'style="width:2em;height:2em;display:block;">' +
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style="width:2em;height:2em;display:block;">' +
         '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
 
     function addButtonToFull(e) {
@@ -261,7 +262,7 @@
         registerComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
-        notify('Плагин "Мой топ" v18 запущен');
+        notify('Плагин "Мой топ" v19 запущен');
     }
 
     if (window.appready) startPlugin();

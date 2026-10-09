@@ -1,49 +1,36 @@
-// main.js — Плагин "Мой топ" для Lampa (v20)
+// main.js — Плагин "Мой топ" для Lampa (v21) — ДИАГНОСТИКА API
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v20';
+    var PLUGIN_NAME = 'my_top_v21';
     var STORAGE_KEY = 'my_movie_top_v14';
-    var TMDB_KEY = '4ef0d7355d9ffb5151e987764708ce96';
 
     function notify(msg) {
         try { if (window.Lampa && Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show(msg); } catch (e) {}
+        console.log('[MyTop]', msg);
     }
     function rawGet(k, d) { try { var v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } }
     function rawSet(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
     function parseJSON(s, d) { if (!s) return d; try { var p = JSON.parse(s); return p || d; } catch (e) { return d; } }
-
-    function getTop() {
-        var raw = rawGet(STORAGE_KEY, '');
-        if (!raw) return {};
-        var p = parseJSON(raw, {});
-        return (p && typeof p === 'object') ? p : {};
-    }
+    function getTop() { var raw = rawGet(STORAGE_KEY, ''); if (!raw) return {}; var p = parseJSON(raw, {}); return (p && typeof p === 'object') ? p : {}; }
     function saveTop(t) { return rawSet(STORAGE_KEY, JSON.stringify(t)); }
-
     function isSeries(c) { return !!(c && (c.name || c.first_air_date || c.media_type === 'tv')); }
     function extractCardInfo(card) {
         if (!card) return null;
         var isTV = isSeries(card);
         var title = isTV ? (card.name || card.original_name || 'Без названия') : (card.title || card.original_title || 'Без названия');
         var dateStr = isTV ? (card.first_air_date || '') : (card.release_date || '');
-        return {
-            id: card.id, title: title,
-            year: dateStr ? dateStr.split('-')[0] : '—',
-            poster: card.poster_path || '',
-            isSeries: isTV, place: null, addedAt: Date.now()
-        };
+        return { id: card.id, title: title, year: dateStr ? dateStr.split('-')[0] : '—', poster: card.poster_path || '', isSeries: isTV, place: null, addedAt: Date.now() };
     }
     function addToTop(card) {
         var info = extractCardInfo(card);
-        if (!info || !info.id) { notify('Не удалось определить карточку'); return; }
+        if (!info || !info.id) { notify('Не удалось определить'); return; }
         var top = getTop();
         if (top[info.id]) { notify('Уже в топе'); return; }
         top[info.id] = info;
         saveTop(top);
         notify('"' + info.title + '" → в топе (' + Object.keys(top).length + ')');
     }
-
     function importFavorites() {
         var fav = parseJSON(rawGet('favorite', ''), null);
         if (!fav) { notify('favorite не найден'); return; }
@@ -63,117 +50,57 @@
         notify('Импортировано: ' + added);
     }
 
-    // ============ TMDB ЗАПРОС (несколько стратегий) ============
-    function tryXHR(url, ok, err) {
-        try {
-            var xhr = new XMLHttpRequest();
-            xhr.open('GET', url, true);
-            xhr.timeout = 8000;
-            xhr.onload = function () {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    try { ok(JSON.parse(xhr.responseText)); }
-                    catch (e) { err('bad json'); }
-                } else {
-                    err('http ' + xhr.status);
-                }
-            };
-            xhr.onerror = function () { err('xhr error'); };
-            xhr.ontimeout = function () { err('xhr timeout'); };
-            xhr.send();
-        } catch (e) { err('xhr exception: ' + e.message); }
-    }
+    // ============ ДИАГНОСТИКА ============
+    function diagCard(id) {
+        if (!window.Lampa || !Lampa.Api) { notify('нет Lampa.Api'); return; }
+        var tmdb = Lampa.Api.sources && Lampa.Api.sources.tmdb;
+        if (!tmdb) { notify('нет sources.tmdb'); return; }
 
-    function tryReguest(url, ok, err) {
-        if (!window.Lampa || !Lampa.Reguest) { err('нет Reguest'); return; }
-        var R = Lampa.Reguest;
+        notify('Тест ID ' + id);
 
-        // Разные варианты вызова
-        var strategies = [
-            function () { R.get(url, ok, err, false, {}, false); },
-            function () { R.get(url, ok, err, false); },
-            function () { R.get(url, ok, err); },
-            function () { R.get(url, { success: ok, error: err }); },
-            function () { R.perform(url, ok, err, false); }
-        ];
-
-        for (var i = 0; i < strategies.length; i++) {
+        // Способ 1: tmdb.get('movie/155')
+        setTimeout(function () {
             try {
-                strategies[i]();
-                return;
-            } catch (e) {
-                // пробуем следующий
-            }
-        }
-        err('все вызовы Reguest упали');
-    }
+                tmdb.get('movie/' + id, function (d) {
+                    notify('1 get(movie/): ' + (d && (d.title || d.name) ? d.title || d.name : 'пусто'));
+                }, function (e) { notify('1 get(movie/) ERR: ' + (e && e.message ? e.message : e)); });
+            } catch (e) { notify('1 throw: ' + e.message); }
+        }, 100);
 
-    function fetchTMDB(id, onSuccess, onFail) {
-        var urlMovie = 'https://api.themoviedb.org/3/movie/' + id + '?api_key=' + TMDB_KEY + '&language=ru';
-        var urlTV = 'https://api.themoviedb.org/3/tv/' + id + '?api_key=' + TMDB_KEY + '&language=ru';
+        // Способ 2: tmdb.get('3/movie/155')
+        setTimeout(function () {
+            try {
+                tmdb.get('3/movie/' + id, function (d) {
+                    notify('2 get(3/movie/): ' + (d && (d.title || d.name) ? d.title || d.name : 'пусто'));
+                }, function (e) { notify('2 get(3/movie/) ERR: ' + (e && e.message ? e.message : e)); });
+            } catch (e) { notify('2 throw: ' + e.message); }
+        }, 2700);
 
-        function attempt(url, ok, err) {
-            // Сначала Reguest (умный), потом XHR (прямой)
-            tryReguest(url, ok, function () {
-                tryXHR(url, ok, err);
-            });
-        }
+        // Способ 3: tmdb.full({id, method:'movie'})
+        setTimeout(function () {
+            try {
+                tmdb.full({ id: id, method: 'movie' }, function (d) {
+                    notify('3 full: ' + (d && (d.title || d.name) ? d.title || d.name : 'пусто'));
+                }, function (e) { notify('3 full ERR: ' + (e && e.message ? e.message : e)); });
+            } catch (e) { notify('3 throw: ' + e.message); }
+        }, 5300);
 
-        function tryMovie() {
-            attempt(urlMovie, function (data) {
-                if (data && data.id && data.title) { onSuccess(data); return; }
-                tryTV();
-            }, function () { tryTV(); });
-        }
-        function tryTV() {
-            attempt(urlTV, function (data) {
-                if (data && data.id && data.name) { onSuccess(data); return; }
-                onFail('нет данных');
-            }, function (e) { onFail('запрос не удался: ' + (e || '?')); });
-        }
-        tryMovie();
-    }
+        // Способ 4: Lampa.Api.full
+        setTimeout(function () {
+            try {
+                Lampa.Api.full({ id: id, method: 'movie' }, function (d) {
+                    notify('4 Api.full: ' + (d && (d.title || d.name) ? d.title || d.name : 'пусто'));
+                }, function (e) { notify('4 Api.full ERR: ' + (e && e.message ? e.message : e)); });
+            } catch (e) { notify('4 throw: ' + e.message); }
+        }, 7900);
 
-    function enrichTop(onDone) {
-        var top = getTop();
-        var ids = Object.keys(top);
-        var pending = ids.filter(function (id) {
-            var item = top[id];
-            return item && item.title && item.title.indexOf('ID ') === 0;
-        });
-        if (!pending.length) { notify('Все уже с метаданными'); if (onDone) onDone(); return; }
-
-        notify('Загружаю: 0/' + pending.length);
-        var index = 0, ok = 0, fail = 0;
-
-        function next() {
-            if (index >= pending.length) {
-                saveTop(top);
-                notify('Готово. ОК: ' + ok + ', ошибок: ' + fail);
-                if (onDone) onDone();
-                return;
-            }
-            var id = pending[index++];
-            fetchTMDB(id, function (data) {
-                var info = extractCardInfo(data);
-                if (info && info.id) {
-                    var oldItem = top[id];
-                    info.id = oldItem.id;
-                    info.place = oldItem.place;
-                    info.addedAt = oldItem.addedAt;
-                    top[id] = info;
-                    ok++;
-                } else { fail++; }
-                if ((index % 10 === 0) || index === pending.length) {
-                    notify('Загружено: ' + index + '/' + pending.length + ' (ОК: ' + ok + ')');
-                }
-                setTimeout(next, 80);
-            }, function (reason) {
-                fail++;
-                if (index === 1) notify('Ошибка: ' + reason);
-                setTimeout(next, 80);
-            });
-        }
-        next();
+        // Способ 5: узнать URL источника
+        setTimeout(function () {
+            try {
+                var info = tmdb.main ? 'есть main' : 'нет main';
+                notify('tmdb ключи: ' + Object.keys(tmdb).slice(0, 8).join(','));
+            } catch (e) { notify('5 throw: ' + e.message); }
+        }, 10500);
     }
 
     // ============ КОМПОНЕНТ ============
@@ -191,9 +118,9 @@
             btnImport.on('hover:enter click', function () { importFavorites(); buildContent(); });
             buttons.append(btnImport);
 
-            var btnEnrich = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Загрузить названия</span></div>');
-            btnEnrich.on('hover:enter click', function () { enrichTop(buildContent); });
-            buttons.append(btnEnrich);
+            var btnDiag = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Тест TMDB</span></div>');
+            btnDiag.on('hover:enter click', function () { diagCard(155); });
+            buttons.append(btnDiag);
 
             var btnClear = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Очистить</span></div>');
             btnClear.on('hover:enter click', function () { saveTop({}); notify('Топ очищен'); buildContent(); });
@@ -248,13 +175,8 @@
         catch (e) { notify('Ошибка открытия: ' + e.message); }
     }
 
-    var STAR_SVG_CARD =
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;">' +
-        '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
-
-    var STAR_SVG_MENU =
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style="width:2em;height:2em;display:block;">' +
-        '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
+    var STAR_SVG_CARD = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;"><path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
+    var STAR_SVG_MENU = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style="width:2em;height:2em;display:block;"><path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
 
     function addButtonToFull(e) {
         if (e.type !== 'complite') return;
@@ -284,12 +206,7 @@
             if (lists.length > 0) {
                 var first = lists.first();
                 if (first.find('.my-top-menu-item').length > 0) return;
-                var item = $(
-                    '<li class="menu__item selector my-top-menu-item">' +
-                    '<div class="menu__ico">' + STAR_SVG_MENU + '</div>' +
-                    '<div class="menu__text">Мой топ</div>' +
-                    '</li>'
-                );
+                var item = $('<li class="menu__item selector my-top-menu-item"><div class="menu__ico">' + STAR_SVG_MENU + '</div><div class="menu__text">Мой топ</div></li>');
                 item.on('click hover:enter', openTopPage);
                 first.append(item);
             } else if (attempts < maxAttempts) setTimeout(tryAdd, 500);
@@ -303,7 +220,7 @@
         registerComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
-        notify('Плагин "Мой топ" v20 запущен');
+        notify('Плагин "Мой топ" v21 запущен');
     }
 
     if (window.appready) startPlugin();

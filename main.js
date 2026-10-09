@@ -1,9 +1,8 @@
-// main.js — Плагин "Мой топ" для Lampa (v19)
-// TMDB через Lampa.Reguest (обход CORS).
+// main.js — Плагин "Мой топ" для Lampa (v20)
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v19';
+    var PLUGIN_NAME = 'my_top_v20';
     var STORAGE_KEY = 'my_movie_top_v14';
     var TMDB_KEY = '4ef0d7355d9ffb5151e987764708ce96';
 
@@ -64,31 +63,72 @@
         notify('Импортировано: ' + added);
     }
 
-    // ============ TMDB ЧЕРЕЗ Lampa.Reguest ============
-    function getReguest() {
-        if (window.Lampa && Lampa.Reguest) return new Lampa.Reguest();
-        if (window.Lampa && Lampa.Utils && Lampa.Utils.Reguest) return new Lampa.Utils.Reguest();
-        return null;
+    // ============ TMDB ЗАПРОС (несколько стратегий) ============
+    function tryXHR(url, ok, err) {
+        try {
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', url, true);
+            xhr.timeout = 8000;
+            xhr.onload = function () {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try { ok(JSON.parse(xhr.responseText)); }
+                    catch (e) { err('bad json'); }
+                } else {
+                    err('http ' + xhr.status);
+                }
+            };
+            xhr.onerror = function () { err('xhr error'); };
+            xhr.ontimeout = function () { err('xhr timeout'); };
+            xhr.send();
+        } catch (e) { err('xhr exception: ' + e.message); }
+    }
+
+    function tryReguest(url, ok, err) {
+        if (!window.Lampa || !Lampa.Reguest) { err('нет Reguest'); return; }
+        var R = Lampa.Reguest;
+
+        // Разные варианты вызова
+        var strategies = [
+            function () { R.get(url, ok, err, false, {}, false); },
+            function () { R.get(url, ok, err, false); },
+            function () { R.get(url, ok, err); },
+            function () { R.get(url, { success: ok, error: err }); },
+            function () { R.perform(url, ok, err, false); }
+        ];
+
+        for (var i = 0; i < strategies.length; i++) {
+            try {
+                strategies[i]();
+                return;
+            } catch (e) {
+                // пробуем следующий
+            }
+        }
+        err('все вызовы Reguest упали');
     }
 
     function fetchTMDB(id, onSuccess, onFail) {
-        var r = getReguest();
-        if (!r) { onFail('нет Lampa.Reguest'); return; }
-
         var urlMovie = 'https://api.themoviedb.org/3/movie/' + id + '?api_key=' + TMDB_KEY + '&language=ru';
         var urlTV = 'https://api.themoviedb.org/3/tv/' + id + '?api_key=' + TMDB_KEY + '&language=ru';
 
+        function attempt(url, ok, err) {
+            // Сначала Reguest (умный), потом XHR (прямой)
+            tryReguest(url, ok, function () {
+                tryXHR(url, ok, err);
+            });
+        }
+
         function tryMovie() {
-            r.get(urlMovie, function (data) {
+            attempt(urlMovie, function (data) {
                 if (data && data.id && data.title) { onSuccess(data); return; }
                 tryTV();
             }, function () { tryTV(); });
         }
         function tryTV() {
-            r.get(urlTV, function (data) {
+            attempt(urlTV, function (data) {
                 if (data && data.id && data.name) { onSuccess(data); return; }
                 onFail('нет данных');
-            }, function () { onFail('запрос не удался'); });
+            }, function (e) { onFail('запрос не удался: ' + (e || '?')); });
         }
         tryMovie();
     }
@@ -136,6 +176,7 @@
         next();
     }
 
+    // ============ КОМПОНЕНТ ============
     function MyTopComponent() {
         var html = $('<div class="my-top-page" style="height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;"></div>');
 
@@ -262,7 +303,7 @@
         registerComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
-        notify('Плагин "Мой топ" v19 запущен');
+        notify('Плагин "Мой топ" v20 запущен');
     }
 
     if (window.appready) startPlugin();

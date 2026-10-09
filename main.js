@@ -1,10 +1,10 @@
-// main.js — Плагин "Мой топ" для Lampa (v8)
-// Исправлена вставка кнопки в правильный контейнер.
+// main.js — Плагин "Мой топ" для Lampa (v9)
+// Исправления: SVG-иконка на кнопке, защита от двойного клика.
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v8';
-    var STORAGE_KEY = 'my_movie_top_v8';
+    var PLUGIN_NAME = 'my_top_v9';
+    var STORAGE_KEY = 'my_movie_top_v9';
 
     function notify(msg) {
         try {
@@ -168,43 +168,59 @@
         catch (e) { notify('Ошибка открытия'); }
     }
 
-    // ============ КНОПКА НА КАРТОЧКЕ (ИСПРАВЛЕНО) ============
+    // ============ КНОПКА НА КАРТОЧКЕ (v9: SVG + защита от двойного клика) ============
+    function buildCardButton(label) {
+        // SVG-звезда с ЖЁСТКИМИ inline-размерами — Lampa CSS не сможет её сжать.
+        // viewBox подобран так, чтобы фигура занимала всё поле.
+        var svg =
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
+            'style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;">' +
+            '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
+            '</svg>';
+
+        return $(
+            '<div class="full-start__button selector view--custom my-top-btn-card" ' +
+            'style="display:flex;align-items:center;gap:0.5em;">' +
+            svg +
+            '<span style="white-space:nowrap;">' + label + '</span>' +
+            '</div>'
+        );
+    }
+
     function addButtonToFull(e) {
         if (e.type !== 'complite') return;
 
         var movie = e.data && e.data.movie ? e.data.movie : null;
         if (!movie) return;
 
-        var label = isSeries(movie) ? '⭐ В мой топ (сериал)' : '⭐ В мой топ';
-        var btn = $('<div class="full-start__button selector view--custom my-top-btn-card"><span>' + label + '</span></div>');
-
-        // Обработчики: клик (для телефона) и hover:enter (для ТВ-пультов)
-        btn.on('click', function () { addToTop(movie); });
-        btn.on('hover:enter', function () { addToTop(movie); });
-
-        // Ищем правильный контейнер для кнопок
+        // Защита от повторного добавления (если complite приходит несколько раз)
         setTimeout(function () {
+            if ($('.my-top-btn-card').length > 0) return;
+
+            var label = isSeries(movie) ? 'В мой топ (сериал)' : 'В мой топ';
+            var btn = buildCardButton(label);
+
+            // Защита от двойного срабатывания: click + hover:enter на Android
+            var busy = false;
+            btn.on('click', function () {
+                if (busy) return;
+                busy = true;
+                setTimeout(function () { busy = false; }, 700);
+                addToTop(movie);
+            });
+
             var container = $('.full-start__buttons');
-            if (container.length && !container.find('.my-top-btn-card').length) {
+            if (container.length) {
                 container.append(btn);
-                console.log('[MyTop] Кнопка добавлена в .full-start__buttons');
                 return;
             }
-            // Запасной вариант, если .full-start__buttons не найден
             var fallback = $('.full-start-new__buttons');
-            if (fallback.length && !fallback.find('.my-top-btn-card').length) {
+            if (fallback.length) {
                 fallback.append(btn);
-                console.log('[MyTop] Кнопка добавлена в .full-start-new__buttons');
                 return;
             }
-            // Третий вариант: ищем любой контейнер с кнопками
             var any = $('[class*="full-start"][class*="buttons"]').first();
-            if (any.length) {
-                any.append(btn);
-                console.log('[MyTop] Кнопка добавлена в найденный контейнер');
-            } else {
-                console.warn('[MyTop] Не найден контейнер для кнопки');
-            }
+            if (any.length) any.append(btn);
         }, 200);
     }
 
@@ -234,7 +250,7 @@
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
 
-        notify('⭐ Плагин "Мой топ" v8 запущен');
+        notify('⭐ Плагин "Мой топ" v9 запущен');
     }
 
     if (window.appready) startPlugin();

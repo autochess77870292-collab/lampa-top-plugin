@@ -1,9 +1,9 @@
-// main.js — Плагин "Мой топ" для Lampa (v16)
-// Значок в меню + обогащение через Lampa.Api.sources.tmdb
+// main.js — Плагин "Мой топ" для Lampa (v17)
+// Обогащение через tmdb.full. Исправлен значок в меню.
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v16';
+    var PLUGIN_NAME = 'my_top_v17';
     var STORAGE_KEY = 'my_movie_top_v14'; // тот же ключ — фильмы не пропадут
 
     function notify(msg) {
@@ -83,17 +83,15 @@
         notify('Импортировано: ' + added);
     }
 
-    // ============ ЗАПРОС В TMDB ============
-    // Пробуем разные варианты сигнатуры, пока один не сработает.
+    // ============ ЗАПРОС В TMDB (через tmdb.full) ============
     function tmdbRequest(id, onSuccess, onFail) {
         var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
-        if (!tmdb || !tmdb.get) { onFail('нет tmdb.get'); return; }
+        if (!tmdb || !tmdb.full) { onFail('нет tmdb.full'); return; }
 
-        // Вариант 1: {method: 'movie', id: id}
+        // Пробуем разные комбинации method
         var attempts = [
             { method: 'movie', id: id },
-            { method: 'movie', id: id, language: 'ru' },
-            { id: id, method: 'movie' }
+            { method: 'tv', id: id }
         ];
 
         var idx = 0;
@@ -101,8 +99,8 @@
             if (idx >= attempts.length) { onFail('все варианты не сработали'); return; }
             var params = attempts[idx++];
             try {
-                tmdb.get(params, function (data) {
-                    if (data && (data.title || data.name || data.movie || data.id)) {
+                tmdb.full(params, function (data) {
+                    if (data && (data.title || data.name || data.id)) {
                         onSuccess(data);
                     } else {
                         tryNext();
@@ -138,7 +136,7 @@
             }
             var id = pending[index++];
             tmdbRequest(id, function (data) {
-                var info = extractCardInfo(data.movie || data);
+                var info = extractCardInfo(data);
                 if (info && info.id) {
                     var oldItem = top[id];
                     info.id = oldItem.id;
@@ -242,10 +240,17 @@
         } catch (e) { notify('Ошибка открытия: ' + e.message); }
     }
 
-    // ============ КНОПКА-ЗВЕЗДА НА КАРТОЧКЕ ============
-    var STAR_SVG =
+    // ============ ЗНАЧОК-ЗВЕЗДА ============
+    // Уменьшен до 1em, добавлен vertical-align для меню.
+    var STAR_SVG_CARD =
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
         'style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;">' +
+        '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
+        '</svg>';
+
+    var STAR_SVG_MENU =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
+        'style="width:1.2em;height:1.2em;vertical-align:middle;display:inline-block;">' +
         '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
         '</svg>';
 
@@ -256,7 +261,7 @@
 
         setTimeout(function () {
             if ($('.my-top-btn-card').length > 0) return;
-            var btn = $('<div class="full-start__button selector view--custom my-top-btn-card" style="display:flex;align-items:center;justify-content:center;">' + STAR_SVG + '</div>');
+            var btn = $('<div class="full-start__button selector view--custom my-top-btn-card" style="display:flex;align-items:center;justify-content:center;">' + STAR_SVG_CARD + '</div>');
             var busy = false;
             btn.on('click', function () {
                 if (busy) return;
@@ -270,7 +275,7 @@
         }, 200);
     }
 
-    // ============ МЕНЮ (со значком-звездой) ============
+    // ============ МЕНЮ ============
     function addMenuItem() {
         var attempts = 0, maxAttempts = 20;
         var tryAdd = function () {
@@ -282,7 +287,7 @@
 
                 var item = $(
                     '<li class="menu__item selector my-top-menu-item">' +
-                    '<div class="menu__ico">' + STAR_SVG + '</div>' +
+                    '<div class="menu__ico" style="display:flex;align-items:center;justify-content:center;">' + STAR_SVG_MENU + '</div>' +
                     '<div class="menu__text">Мой топ</div>' +
                     '</li>'
                 );
@@ -299,7 +304,7 @@
         registerComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
-        notify('Плагин "Мой топ" v16 запущен');
+        notify('Плагин "Мой топ" v17 запущен');
     }
 
     if (window.appready) startPlugin();

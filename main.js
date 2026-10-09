@@ -1,9 +1,10 @@
-// main.js — Плагин "Мой топ" v7 (комбо: диагностика + функционал)
+// main.js — Плагин "Мой топ" для Lampa (v8)
+// Исправлена вставка кнопки в правильный контейнер.
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v7';
-    var STORAGE_KEY = 'my_movie_top_v7';
+    var PLUGIN_NAME = 'my_top_v8';
+    var STORAGE_KEY = 'my_movie_top_v8';
 
     function notify(msg) {
         try {
@@ -167,33 +168,44 @@
         catch (e) { notify('Ошибка открытия'); }
     }
 
-    // ============ КНОПКА НА КАРТОЧКЕ ============
+    // ============ КНОПКА НА КАРТОЧКЕ (ИСПРАВЛЕНО) ============
     function addButtonToFull(e) {
-        // Показываем тип события — одно уведомление на карточку
-        if (e && e.type) {
-            console.log('[MyTop v7] event:', e.type);
-        }
-
         if (e.type !== 'complite') return;
 
         var movie = e.data && e.data.movie ? e.data.movie : null;
         if (!movie) return;
 
-        notify('Событие complite — добавляю кнопку');
-
         var label = isSeries(movie) ? '⭐ В мой топ (сериал)' : '⭐ В мой топ';
-        var btn = $('<div class="full-start__button view--custom"><span>' + label + '</span></div>');
+        var btn = $('<div class="full-start__button selector view--custom my-top-btn-card"><span>' + label + '</span></div>');
 
+        // Обработчики: клик (для телефона) и hover:enter (для ТВ-пультов)
         btn.on('click', function () { addToTop(movie); });
         btn.on('hover:enter', function () { addToTop(movie); });
 
-        try {
-            if (e.object && e.object.activity) {
-                e.object.activity.render().find('.view--custom').last().after(btn);
+        // Ищем правильный контейнер для кнопок
+        setTimeout(function () {
+            var container = $('.full-start__buttons');
+            if (container.length && !container.find('.my-top-btn-card').length) {
+                container.append(btn);
+                console.log('[MyTop] Кнопка добавлена в .full-start__buttons');
+                return;
             }
-        } catch (err) {
-            notify('Ошибка вставки кнопки: ' + err.message);
-        }
+            // Запасной вариант, если .full-start__buttons не найден
+            var fallback = $('.full-start-new__buttons');
+            if (fallback.length && !fallback.find('.my-top-btn-card').length) {
+                fallback.append(btn);
+                console.log('[MyTop] Кнопка добавлена в .full-start-new__buttons');
+                return;
+            }
+            // Третий вариант: ищем любой контейнер с кнопками
+            var any = $('[class*="full-start"][class*="buttons"]').first();
+            if (any.length) {
+                any.append(btn);
+                console.log('[MyTop] Кнопка добавлена в найденный контейнер');
+            } else {
+                console.warn('[MyTop] Не найден контейнер для кнопки');
+            }
+        }, 200);
     }
 
     // ============ МЕНЮ ============
@@ -222,7 +234,7 @@
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
 
-        notify('⭐ Плагин "Мой топ" v7 запущен');
+        notify('⭐ Плагин "Мой топ" v8 запущен');
     }
 
     if (window.appready) startPlugin();

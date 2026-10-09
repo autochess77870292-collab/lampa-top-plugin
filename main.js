@@ -1,10 +1,10 @@
-// main.js — Плагин "Мой топ" для Lampa (v10)
-// v10: звезда-кнопка + диагностика localStorage + автопарсинг избранного.
+// main.js — Плагин "Мой топ" для Lampa (v11)
+// Отказ от Lampa.Component. Своя страница через overlay.
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v10';
-    var STORAGE_KEY = 'my_movie_top_v10';
+    var PLUGIN_NAME = 'my_top_v11';
+    var STORAGE_KEY = 'my_movie_top_v11';
 
     function notify(msg) {
         try {
@@ -53,103 +53,47 @@
         notify(ok ? ('✔ "' + info.title + '" → в топе (' + Object.keys(top).length + ')') : '✖ Ошибка сохранения');
     }
 
-    // ============ ИМПОРТ ИЗ "ИЗБРАННОГО" LAMPA ============
-    // В Lampa ключ 'favorite' — это объект, где каждая категория это массив ID.
-    // Нам нужна категория, в которой 64 элемента (то, что пользователь видит как "Просмотрено").
-    // Точное имя категории мы определим по факту, поэтому пробуем всё сразу.
+    // ============ ИМПОРТ ============
     function importFavorites() {
         var raw = rawGet('favorite', '');
-        if (!raw) { notify('Ключ favorite пуст'); return 0; }
+        if (!raw) { notify('Ключ favorite пуст'); return; }
 
         var data;
-        try { data = JSON.parse(raw); } catch (e) { notify('favorite не JSON: ' + e.message); return 0; }
-        if (!data || typeof data !== 'object') { notify('favorite не объект'); return 0; }
+        try { data = JSON.parse(raw); } catch (e) { notify('favorite не JSON'); return; }
+        if (!data || typeof data !== 'object') { notify('favorite не объект'); return; }
 
-        // Категории, которые, вероятно, значат "просмотрено"
-        var candidates = ['viewed', 'wath', 'history', 'view', 'watched', 'seen'];
-        var found = null;
         var report = [];
         Object.keys(data).forEach(function (k) {
             var v = data[k];
             var count = Array.isArray(v) ? v.length : (typeof v === 'object' ? Object.keys(v).length : 0);
             report.push(k + ':' + count);
-            if (candidates.indexOf(k) !== -1 && count > 0) found = k;
         });
-
-        notify('Категории favorite: ' + report.join(', '));
-
-        if (!found) {
-            notify('Не нашёл категорию "просмотрено". Смотри диагностику.');
-            return 0;
-        }
-
-        var top = getTop();
-        var added = 0;
-        var ids = Array.isArray(data[found]) ? data[found] : Object.keys(data[found]);
-        ids.forEach(function (id) {
-            var sid = String(id);
-            if (!top[sid]) {
-                top[sid] = {
-                    id: id,
-                    title: 'ID ' + id + ' (нужно название)',
-                    year: '—',
-                    poster: '',
-                    isSeries: false,
-                    place: null,
-                    addedAt: Date.now()
-                };
-                added++;
-            }
-        });
-        saveTop(top);
-        notify('Импортировано из "' + found + '": ' + added);
-        return added;
+        notify('favorite → ' + report.join(', '));
     }
 
-    // ============ ДИАГНОСТИКА localStorage ============
-    function buildDiagHTML() {
-        var keys = Object.keys(localStorage).sort();
-        var html = '<div style="padding:12px;color:#e8e8ec;font-family:monospace;font-size:11px;line-height:1.5;">';
-        html += '<div style="margin-bottom:12px;"><b style="font-size:14px;">Всего ключей: ' + keys.length + '</b></div>';
-
-        keys.forEach(function (k) {
-            var val = localStorage.getItem(k) || '';
-            var preview = val.length > 400 ? val.substring(0, 400) + '...' : val;
-            preview = preview.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            html += '<div style="margin-bottom:10px;padding:8px;background:#141418;border:1px solid #2c2c34;border-radius:6px;">';
-            html += '<div style="color:#3a6df0;font-weight:bold;">' + k + '</div>';
-            html += '<div style="color:#6a6a75;margin:4px 0;">Размер: ' + val.length + ' байт</div>';
-            html += '<div style="color:#8a8a95;word-break:break-all;">' + preview + '</div>';
-            html += '</div>';
-        });
-
-        html += '</div>';
-        return html;
-    }
-
-    // ============ СТРАНИЦА ТОПА ============
-    function renderTopPage() {
+    // ============ HTML СТРАНИЦЫ ============
+    function buildPageHTML() {
         var top = getTop();
         var ids = Object.keys(top);
-        var rawJson = rawGet(STORAGE_KEY, '(пусто)');
 
-        var debug = '<div class="my-top-debug"><b>Отладка</b><br>' +
-            'Ключ: <code>' + STORAGE_KEY + '</code><br>' +
-            'Элементов в топе: <b>' + ids.length + '</b>' +
-            '</div>';
+        var html = '';
+        html += '<div style="display:flex;gap:8px;padding:12px;flex-wrap:wrap;">';
+        html += '<button class="myt-btn" data-act="import" style="flex:1;padding:14px;background:#3a6df0;color:#fff;border:0;border-radius:8px;font-size:14px;">📥 Импорт из избранного</button>';
+        html += '<button class="myt-btn" data-act="diag" style="flex:1;padding:14px;background:#2c2c34;color:#e8e8ec;border:0;border-radius:8px;font-size:14px;">🔍 Все ключи</button>';
+        html += '</div>';
 
-        var buttons =
-            '<div class="my-top-test-buttons">' +
-            '<div class="my-top-btn" id="my-top-test-import">📥 Импорт из избранного</div>' +
-            '<div class="my-top-btn" id="my-top-test-diag">🔍 Все ключи</div>' +
-            '</div>' +
-            '<div class="my-top-test-buttons">' +
-            '<div class="my-top-btn" id="my-top-test-add">🧪 Тестовый</div>' +
-            '<div class="my-top-btn my-top-btn-danger" id="my-top-test-clear">🗑 Очистить</div>' +
-            '</div>';
+        html += '<div style="display:flex;gap:8px;padding:0 12px 12px;">';
+        html += '<button class="myt-btn" data-act="test" style="flex:1;padding:12px;background:#2c2c34;color:#e8e8ec;border:0;border-radius:8px;font-size:13px;">🧪 Тест</button>';
+        html += '<button class="myt-btn" data-act="clear" style="flex:1;padding:12px;background:#5a2020;color:#e8e8ec;border:0;border-radius:8px;font-size:13px;">🗑 Очистить</button>';
+        html += '</div>';
+
+        html += '<div style="margin:12px;padding:12px;background:#141418;border:1px solid #2c2c34;border-radius:8px;color:#8a8a95;font-size:12px;line-height:1.6;">';
+        html += '<b>Отладка</b><br>Ключ: <code>' + STORAGE_KEY + '</code><br>Элементов: <b>' + ids.length + '</b>';
+        html += '</div>';
 
         if (ids.length === 0) {
-            return '<div class="my-top-page"><div class="my-top-empty">Список пуст.</div>' + buttons + debug + '</div>';
+            html += '<div style="padding:30px;text-align:center;color:#8a8a95;">Список пуст</div>';
+            return html;
         }
 
         var items = ids.map(function (id) { return top[id]; });
@@ -160,95 +104,98 @@
             return (a.addedAt || 0) - (b.addedAt || 0);
         });
 
-        var list = '<div class="my-top-list">';
+        html += '<div style="padding:0 12px;">';
         items.forEach(function (item) {
             var placeText = item.place ? '#' + item.place : '—';
             var poster = item.poster ? 'https://image.tmdb.org/t/p/w200' + item.poster : '';
-            var badge = item.isSeries ? '<span class="my-top-badge">СЕРИАЛ</span>' : '';
-            list += '<div class="my-top-item">' +
-                '<div class="my-top-place">' + placeText + '</div>' +
-                (poster ? '<div class="my-top-poster"><img src="' + poster + '"></div>' : '') +
-                '<div class="my-top-info">' +
-                '<div class="my-top-title">' + item.title + badge + '</div>' +
-                '<div class="my-top-year">' + (item.year || '—') + '</div>' +
-                '</div></div>';
+            html += '<div style="display:flex;align-items:center;gap:12px;background:#1c1c22;border-radius:10px;padding:12px;margin-bottom:10px;">';
+            html += '<div style="font-size:20px;font-weight:700;color:#3a6df0;min-width:40px;text-align:center;">' + placeText + '</div>';
+            if (poster) html += '<div><img src="' + poster + '" style="width:50px;height:75px;object-fit:cover;border-radius:6px;"></div>';
+            html += '<div style="flex:1;min-width:0;">';
+            html += '<div style="font-size:15px;font-weight:600;color:#e8e8ec;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + item.title + '</div>';
+            html += '<div style="font-size:13px;color:#8a8a95;margin-top:4px;">' + (item.year || '—') + '</div>';
+            html += '</div></div>';
         });
-        list += '</div>';
+        html += '</div>';
 
-        return '<div class="my-top-page">' + list + buttons + debug + '</div>';
+        return html;
     }
 
-    function pageStyles() {
-        return '<style>' +
-            '.my-top-page{padding-bottom:60px;}' +
-            '.my-top-empty{padding:30px 20px;text-align:center;color:#8a8a95;font-size:15px;}' +
-            '.my-top-list{display:flex;flex-direction:column;gap:10px;padding:8px 16px;}' +
-            '.my-top-item{display:flex;align-items:center;gap:12px;background:#1c1c22;border-radius:10px;padding:12px;}' +
-            '.my-top-place{font-size:20px;font-weight:700;color:#3a6df0;min-width:40px;text-align:center;}' +
-            '.my-top-poster img{width:50px;height:75px;object-fit:cover;border-radius:6px;}' +
-            '.my-top-info{flex:1;min-width:0;}' +
-            '.my-top-title{font-size:15px;font-weight:600;color:#e8e8ec;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
-            '.my-top-badge{display:inline-block;margin-left:8px;padding:2px 6px;font-size:10px;font-weight:700;background:#3a6df0;color:#fff;border-radius:4px;vertical-align:middle;}' +
-            '.my-top-year{font-size:13px;color:#8a8a95;margin-top:4px;}' +
-            '.my-top-test-buttons{display:flex;gap:10px;padding:0 16px 12px;}' +
-            '.my-top-btn{flex:1;padding:12px;background:#2c2c34;color:#e8e8ec;border-radius:8px;text-align:center;font-size:13px;cursor:pointer;}' +
-            '.my-top-btn-danger{background:#5a2020;}' +
-            '.my-top-debug{margin:16px;padding:12px;background:#141418;border:1px solid #2c2c34;border-radius:8px;color:#8a8a95;font-size:12px;line-height:1.6;}' +
-            '</style>';
-    }
+    function buildDiagHTML() {
+        var keys = Object.keys(localStorage).sort();
+        var html = '<div style="padding:12px;color:#e8e8ec;font-family:monospace;font-size:11px;line-height:1.5;">';
+        html += '<div style="margin-bottom:12px;"><b style="font-size:14px;">Всего ключей: ' + keys.length + '</b></div>';
 
-    function refreshPage() {
-        var wrapper = $('.my-top-page-wrapper');
-        if (wrapper.length) {
-            wrapper.html(renderTopPage() + pageStyles());
-            bindPageButtons();
-        }
-    }
-
-    function bindPageButtons() {
-        setTimeout(function () {
-            $('#my-top-test-import').off('click').on('click', function () {
-                importFavorites();
-                refreshPage();
-            });
-            $('#my-top-test-diag').off('click').on('click', function () {
-                var wrapper = $('.my-top-page-wrapper');
-                var backBtn = '<div style="padding:12px;"><div class="my-top-btn" id="my-top-back">← Назад</div></div>';
-                wrapper.html(backBtn + buildDiagHTML());
-                $('#my-top-back').on('click', function () { refreshPage(); });
-            });
-            $('#my-top-test-add').off('click').on('click', function () {
-                addToTop({ id: 999999, title: 'Тестовый фильм', release_date: '2024-01-01', poster_path: '' });
-                refreshPage();
-            });
-            $('#my-top-test-clear').off('click').on('click', function () {
-                saveTop({});
-                refreshPage();
-                notify('Топ очищен');
-            });
-        }, 100);
-    }
-
-    function registerTopComponent() {
-        if (!window.Lampa || !Lampa.Component || !Lampa.Component.add) return;
-        Lampa.Component.add('my_top_page', {
-            create: function () {
-                var html = $('<div class="my-top-page-wrapper"></div>');
-                html.html(renderTopPage() + pageStyles());
-                this.html = html;
-                bindPageButtons();
-                return html;
-            },
-            start: function () {
-                if (this.html) { this.html.html(renderTopPage() + pageStyles()); bindPageButtons(); }
-            },
-            render: function () { return this.html; }
+        keys.forEach(function (k) {
+            var val = localStorage.getItem(k) || '';
+            var preview = val.length > 500 ? val.substring(0, 500) + '...' : val;
+            preview = preview.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            html += '<div style="margin-bottom:10px;padding:8px;background:#141418;border:1px solid #2c2c34;border-radius:6px;">';
+            html += '<div style="color:#3a6df0;font-weight:bold;word-break:break-all;">' + k + '</div>';
+            html += '<div style="color:#6a6a75;margin:4px 0;">Размер: ' + val.length + ' байт</div>';
+            html += '<div style="color:#8a8a95;word-break:break-all;">' + preview + '</div>';
+            html += '</div>';
         });
+
+        html += '</div>';
+        return html;
     }
 
+    // ============ OVERLAY ============
     function openTopPage() {
-        try { Lampa.Activity.push({ url: '', title: '⭐ Мой топ', component: 'my_top_page', data: {} }); }
-        catch (e) { notify('Ошибка открытия'); }
+        // Удаляем старый, если есть
+        $('#my-top-overlay').remove();
+
+        var overlay = $(
+            '<div id="my-top-overlay" style="position:fixed;top:0;left:0;right:0;bottom:0;' +
+            'background:#0f0f12;z-index:99999;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;">' +
+
+            '<div style="position:sticky;top:0;background:#1a1a20;padding:16px;display:flex;justify-content:space-between;align-items:center;z-index:10;">' +
+            '<div style="font-size:18px;color:#e8e8ec;">⭐ Мой топ</div>' +
+            '<div id="my-top-close" style="padding:8px 16px;background:#2c2c34;border-radius:6px;color:#e8e8ec;cursor:pointer;font-size:14px;">Закрыть</div>' +
+            '</div>' +
+
+            '<div id="my-top-content"></div>' +
+            '</div>'
+        );
+
+        $('body').append(overlay);
+        renderContent();
+    }
+
+    function renderContent() {
+        var $content = $('#my-top-content');
+        $content.html(buildPageHTML());
+        bindButtons();
+    }
+
+    function bindButtons() {
+        $('.myt-btn').off('click').on('click', function () {
+            var act = $(this).data('act');
+
+            if (act === 'import') {
+                importFavorites();
+            } else if (act === 'diag') {
+                var $content = $('#my-top-content');
+                $content.html(
+                    '<div style="padding:12px;">' +
+                    '<button id="myt-back" style="padding:10px 16px;background:#2c2c34;color:#e8e8ec;border:0;border-radius:8px;font-size:14px;">← Назад</button>' +
+                    '</div>' + buildDiagHTML()
+                );
+                $('#myt-back').on('click', function () { renderContent(); });
+            } else if (act === 'test') {
+                addToTop({ id: 999999, title: 'Тестовый фильм', release_date: '2024-01-01', poster_path: '' });
+                renderContent();
+            } else if (act === 'clear') {
+                saveTop({});
+                notify('Топ очищен');
+                renderContent();
+            }
+        });
+
+        $('#my-top-close').off('click').on('click', function () {
+            $('#my-top-overlay').remove();
+        });
     }
 
     // ============ КНОПКА-ЗВЕЗДА НА КАРТОЧКЕ ============
@@ -310,11 +257,10 @@
         if (window[PLUGIN_NAME]) return;
         window[PLUGIN_NAME] = true;
 
-        registerTopComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
 
-        notify('⭐ Плагин "Мой топ" v10 запущен');
+        notify('⭐ Плагин "Мой топ" v11 запущен');
     }
 
     if (window.appready) startPlugin();

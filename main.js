@@ -1,28 +1,19 @@
-// main.js — Плагин "Мой топ" для Lampa (v17)
-// Обогащение через tmdb.full. Исправлен значок в меню.
+// main.js — Плагин "Мой топ" для Lampa (v18)
+// Прямой запрос к TMDB API. Значок 2em.
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v17';
-    var STORAGE_KEY = 'my_movie_top_v14'; // тот же ключ — фильмы не пропадут
+    var PLUGIN_NAME = 'my_top_v18';
+    var STORAGE_KEY = 'my_movie_top_v14';
+    var TMDB_KEY = '4ef0d7355d9ffb5151e987764708ce96';
+    var TMDB_BASE = 'https://api.themoviedb.org/3';
 
     function notify(msg) {
-        try {
-            if (window.Lampa && Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show(msg);
-        } catch (e) {}
+        try { if (window.Lampa && Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show(msg); } catch (e) {}
     }
-
-    function rawGet(key, def) {
-        try { var v = localStorage.getItem(key); return (v === null) ? def : v; }
-        catch (e) { return def; }
-    }
-    function rawSet(key, val) {
-        try { localStorage.setItem(key, val); return true; } catch (e) { return false; }
-    }
-    function parseJSON(str, def) {
-        if (!str) return def;
-        try { var p = JSON.parse(str); return p || def; } catch (e) { return def; }
-    }
+    function rawGet(k, d) { try { var v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } }
+    function rawSet(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
+    function parseJSON(s, d) { if (!s) return d; try { var p = JSON.parse(s); return p || d; } catch (e) { return d; } }
 
     function getTop() {
         var raw = rawGet(STORAGE_KEY, '');
@@ -30,10 +21,10 @@
         var p = parseJSON(raw, {});
         return (p && typeof p === 'object') ? p : {};
     }
-    function saveTop(top) { return rawSet(STORAGE_KEY, JSON.stringify(top)); }
+    function saveTop(t) { return rawSet(STORAGE_KEY, JSON.stringify(t)); }
 
     function isSeries(c) {
-        return !!(c && (c.name || c.first_air_date || c.media_type === 'tv' || c.number_of_seasons !== undefined));
+        return !!(c && (c.name || c.first_air_date || c.media_type === 'tv'));
     }
     function extractCardInfo(card) {
         if (!card) return null;
@@ -41,13 +32,10 @@
         var title = isTV ? (card.name || card.original_name || 'Без названия') : (card.title || card.original_title || 'Без названия');
         var dateStr = isTV ? (card.first_air_date || '') : (card.release_date || '');
         return {
-            id: card.id,
-            title: title,
+            id: card.id, title: title,
             year: dateStr ? dateStr.split('-')[0] : '—',
             poster: card.poster_path || '',
-            isSeries: isTV,
-            place: null,
-            addedAt: Date.now()
+            isSeries: isTV, place: null, addedAt: Date.now()
         };
     }
     function addToTop(card) {
@@ -66,54 +54,41 @@
         var viewedIds = fav.viewed;
         if (!viewedIds) { notify('Нет viewed'); return; }
         var ids = Array.isArray(viewedIds) ? viewedIds : Object.keys(viewedIds);
-        if (ids.length === 0) { notify('viewed пуст'); return; }
-
+        if (!ids.length) { notify('viewed пуст'); return; }
         var top = getTop();
         var added = 0;
         ids.forEach(function (id) {
             var sid = String(id);
             if (top[sid]) return;
-            top[sid] = {
-                id: id, title: 'ID ' + id, year: '—', poster: '',
-                isSeries: false, place: null, addedAt: Date.now()
-            };
+            top[sid] = { id: id, title: 'ID ' + id, year: '—', poster: '', isSeries: false, place: null, addedAt: Date.now() };
             added++;
         });
         saveTop(top);
         notify('Импортировано: ' + added);
     }
 
-    // ============ ЗАПРОС В TMDB (через tmdb.full) ============
-    function tmdbRequest(id, onSuccess, onFail) {
-        var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
-        if (!tmdb || !tmdb.full) { onFail('нет tmdb.full'); return; }
+    // ============ TMDB ЗАПРОС ============
+    function fetchTMDB(id, onSuccess, onFail) {
+        var urlMovie = TMDB_BASE + '/movie/' + id + '?api_key=' + TMDB_KEY + '&language=ru';
+        var urlTV = TMDB_BASE + '/tv/' + id + '?api_key=' + TMDB_KEY + '&language=ru';
 
-        // Пробуем разные комбинации method
-        var attempts = [
-            { method: 'movie', id: id },
-            { method: 'tv', id: id }
-        ];
-
-        var idx = 0;
-        function tryNext() {
-            if (idx >= attempts.length) { onFail('все варианты не сработали'); return; }
-            var params = attempts[idx++];
-            try {
-                tmdb.full(params, function (data) {
-                    if (data && (data.title || data.name || data.id)) {
-                        onSuccess(data);
-                    } else {
-                        tryNext();
-                    }
-                }, function () { tryNext(); });
-            } catch (e) {
-                tryNext();
-            }
-        }
-        tryNext();
+        fetch(urlMovie).then(function (r) {
+            if (!r.ok) throw new Error('movie ' + r.status);
+            return r.json();
+        }).then(function (data) {
+            if (data && data.id && data.title) onSuccess(data);
+            else throw new Error('bad data');
+        }).catch(function () {
+            fetch(urlTV).then(function (r) {
+                if (!r.ok) throw new Error('tv ' + r.status);
+                return r.json();
+            }).then(function (data) {
+                if (data && data.id && data.name) onSuccess(data);
+                else onFail('tv bad data');
+            }).catch(function (e) { onFail(e.message); });
+        });
     }
 
-    // ============ ОБОГАЩЕНИЕ ============
     function enrichTop(onDone) {
         var top = getTop();
         var ids = Object.keys(top);
@@ -121,8 +96,7 @@
             var item = top[id];
             return item && item.title && item.title.indexOf('ID ') === 0;
         });
-
-        if (pending.length === 0) { notify('Все уже с метаданными'); if (onDone) onDone(); return; }
+        if (!pending.length) { notify('Все уже с метаданными'); if (onDone) onDone(); return; }
 
         notify('Загружаю: 0/' + pending.length);
         var index = 0, ok = 0, fail = 0;
@@ -130,12 +104,12 @@
         function next() {
             if (index >= pending.length) {
                 saveTop(top);
-                notify('Готово. Успешно: ' + ok + ', ошибок: ' + fail);
+                notify('Готово. ОК: ' + ok + ', ошибок: ' + fail);
                 if (onDone) onDone();
                 return;
             }
             var id = pending[index++];
-            tmdbRequest(id, function (data) {
+            fetchTMDB(id, function (data) {
                 var info = extractCardInfo(data);
                 if (info && info.id) {
                     var oldItem = top[id];
@@ -144,16 +118,14 @@
                     info.addedAt = oldItem.addedAt;
                     top[id] = info;
                     ok++;
-                } else {
-                    fail++;
-                }
+                } else { fail++; }
                 if ((index % 10 === 0) || index === pending.length) {
-                    notify('Загружено: ' + index + '/' + pending.length + ' (ок: ' + ok + ')');
+                    notify('Загружено: ' + index + '/' + pending.length + ' (ОК: ' + ok + ')');
                 }
                 setTimeout(next, 80);
             }, function (reason) {
                 fail++;
-                if (index === 1) notify('Ошибка запроса: ' + reason);
+                if (index === 1) notify('Ошибка: ' + reason);
                 setTimeout(next, 80);
             });
         }
@@ -180,19 +152,13 @@
             buttons.append(btnEnrich);
 
             var btnClear = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Очистить</span></div>');
-            btnClear.on('hover:enter click', function () {
-                saveTop({});
-                notify('Топ очищен');
-                buildContent();
-            });
+            btnClear.on('hover:enter click', function () { saveTop({}); notify('Топ очищен'); buildContent(); });
             buttons.append(btnClear);
 
             html.append(buttons);
+            html.append('<div style="margin:0 20px 20px;padding:12px;background:rgba(0,0,0,0.3);border-radius:8px;color:#8a8a95;font-size:12px;">Элементов: <b>' + ids.length + '</b></div>');
 
-            html.append('<div style="margin:0 20px 20px;padding:12px;background:rgba(0,0,0,0.3);border-radius:8px;color:#8a8a95;font-size:12px;">' +
-                'Элементов: <b>' + ids.length + '</b></div>');
-
-            if (ids.length === 0) {
+            if (!ids.length) {
                 html.append('<div style="padding:40px;text-align:center;color:#8a8a95;">Список пуст</div>');
                 return;
             }
@@ -209,7 +175,7 @@
             items.forEach(function (item) {
                 var placeText = item.place ? '#' + item.place : '—';
                 var poster = item.poster ? 'https://image.tmdb.org/t/p/w200' + item.poster : '';
-                var row = $(
+                list.append(
                     '<div style="display:flex;align-items:center;gap:14px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06);">' +
                     '<div style="font-size:22px;font-weight:700;color:#ffdd55;min-width:44px;text-align:center;">' + placeText + '</div>' +
                     (poster ? '<img src="' + poster + '" style="width:54px;height:80px;object-fit:cover;border-radius:6px;" onerror="this.style.display=\'none\'">' : '') +
@@ -218,7 +184,6 @@
                     '<div style="font-size:13px;color:#8a8a95;margin-top:4px;">' + (item.year || '—') + '</div>' +
                     '</div></div>'
                 );
-                list.append(row);
             });
             html.append(list);
         }
@@ -235,30 +200,24 @@
     }
 
     function openTopPage() {
-        try {
-            Lampa.Activity.push({ url: '', title: 'Мой топ', component: 'my_top_page', data: {} });
-        } catch (e) { notify('Ошибка открытия: ' + e.message); }
+        try { Lampa.Activity.push({ url: '', title: 'Мой топ', component: 'my_top_page', data: {} }); }
+        catch (e) { notify('Ошибка открытия: ' + e.message); }
     }
 
-    // ============ ЗНАЧОК-ЗВЕЗДА ============
-    // Уменьшен до 1em, добавлен vertical-align для меню.
     var STAR_SVG_CARD =
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
         'style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;">' +
-        '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
-        '</svg>';
+        '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
 
     var STAR_SVG_MENU =
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
-        'style="width:1.2em;height:1.2em;vertical-align:middle;display:inline-block;">' +
-        '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
-        '</svg>';
+        'style="width:2em;height:2em;display:block;">' +
+        '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
 
     function addButtonToFull(e) {
         if (e.type !== 'complite') return;
         var movie = e.data && e.data.movie ? e.data.movie : null;
         if (!movie) return;
-
         setTimeout(function () {
             if ($('.my-top-btn-card').length > 0) return;
             var btn = $('<div class="full-start__button selector view--custom my-top-btn-card" style="display:flex;align-items:center;justify-content:center;">' + STAR_SVG_CARD + '</div>');
@@ -269,13 +228,12 @@
                 setTimeout(function () { busy = false; }, 700);
                 addToTop(movie);
             });
-            var container = $('.full-start__buttons');
-            if (container.length) container.append(btn);
+            var c = $('.full-start__buttons');
+            if (c.length) c.append(btn);
             else $('[class*="full-start"][class*="buttons"]').first().append(btn);
         }, 200);
     }
 
-    // ============ МЕНЮ ============
     function addMenuItem() {
         var attempts = 0, maxAttempts = 20;
         var tryAdd = function () {
@@ -284,10 +242,9 @@
             if (lists.length > 0) {
                 var first = lists.first();
                 if (first.find('.my-top-menu-item').length > 0) return;
-
                 var item = $(
                     '<li class="menu__item selector my-top-menu-item">' +
-                    '<div class="menu__ico" style="display:flex;align-items:center;justify-content:center;">' + STAR_SVG_MENU + '</div>' +
+                    '<div class="menu__ico">' + STAR_SVG_MENU + '</div>' +
                     '<div class="menu__text">Мой топ</div>' +
                     '</li>'
                 );
@@ -304,7 +261,7 @@
         registerComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
-        notify('Плагин "Мой топ" v17 запущен');
+        notify('Плагин "Мой топ" v18 запущен');
     }
 
     if (window.appready) startPlugin();

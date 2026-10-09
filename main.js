@@ -1,10 +1,11 @@
-// main.js — Плагин "Мой топ" для Lampa (v13)
-// Импорт из "viewed" + метаданные из "card". Прокручиваемая диагностика.
+// main.js — Плагин "Мой топ" для Lampa (v14)
+// Обогащение через Lampa.Api.movie + понятная диагностика.
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v13';
-    var STORAGE_KEY = 'my_movie_top_v13';
+    var PLUGIN_NAME = 'my_top_v14';
+    var STORAGE_KEY = 'my_movie_top_v14';
+    var IMPORTED_FROM_V13 = 'my_movie_top_v13'; // переносим прошлый импорт
 
     function notify(msg) {
         try {
@@ -61,81 +62,138 @@
         notify('✔ "' + info.title + '" → в топе (' + Object.keys(top).length + ')');
     }
 
-    // ============ ИМПОРТ ИЗ "ИЗБРАННОГО" ============
+    // ============ ИМПОРТ ============
     function importFavorites() {
         var fav = parseJSON(rawGet('favorite', ''), null);
-        if (!fav) { notify('Ключ favorite не найден или пуст'); return; }
-
-        // Берём категорию "viewed" (просмотрено)
+        if (!fav) { notify('favorite не найден'); return; }
         var viewedIds = fav.viewed;
-        if (!viewedIds) { notify('Нет категории viewed'); return; }
-
-        // viewed может быть массивом или объектом
+        if (!viewedIds) { notify('Нет viewed'); return; }
         var ids = Array.isArray(viewedIds) ? viewedIds : Object.keys(viewedIds);
         if (ids.length === 0) { notify('viewed пуст'); return; }
 
-        // Пробуем получить полные карточки из ключа "card"
-        var cards = parseJSON(rawGet('card', ''), {});
-        var hasCards = cards && typeof cards === 'object' && Object.keys(cards).length > 0;
-
         var top = getTop();
         var added = 0;
-        var withMeta = 0;
-
         ids.forEach(function (id) {
             var sid = String(id);
             if (top[sid]) return;
-
-            var info;
-            // card может быть: { "12345": {title: ...}, ... } — ищем по ID
-            var rawCard = hasCards ? (cards[sid] || cards[id]) : null;
-
-            if (rawCard && (rawCard.title || rawCard.name)) {
-                info = extractCardInfo(rawCard);
-                if (info) withMeta++;
-            }
-
-            if (!info) {
-                info = {
-                    id: id,
-                    title: 'ID ' + id,
-                    year: '—',
-                    poster: '',
-                    isSeries: false,
-                    place: null,
-                    addedAt: Date.now()
-                };
-            }
-
-            info.id = id; // всегда оригинальный ID
-            info.place = null;
-            info.addedAt = Date.now();
-
-            top[sid] = info;
+            top[sid] = {
+                id: id, title: 'ID ' + id, year: '—', poster: '',
+                isSeries: false, place: null, addedAt: Date.now()
+            };
             added++;
         });
-
         saveTop(top);
-        notify('Импортировано: ' + added + ' (с метаданными: ' + withMeta + ')');
+        notify('Импортировано: ' + added + ' (из viewed)');
+    }
+
+    // Перенос данных из v13 (если есть)
+    function migrateFromV13() {
+        var oldRaw = rawGet(IMPORTED_FROM_V13, '');
+        if (!oldRaw) return;
+        var oldTop = parseJSON(oldRaw, {});
+        if (!oldTop || typeof oldTop !== 'object') return;
+        var newTop = getTop();
+        var moved = 0;
+        Object.keys(oldTop).forEach(function (k) {
+            if (!newTop[k]) { newTop[k] = oldTop[k]; moved++; }
+        });
+        if (moved > 0) {
+            saveTop(newTop);
+            notify('Перенесено из v13: ' + moved);
+        }
+    }
+
+    // ============ ОБОГАЩЕНИЕ ЧЕРЕЗ Lampa.Api ============
+    function enrichTop(onDone) {
+        var top = getTop();
+        var ids = Object.keys(top);
+        var pending = ids.filter(function (id) {
+            var item = top[id];
+            return item && item.title && item.title.indexOf('ID ') === 0;
+        });
+
+        if (pending.length === 0) { notify('Все уже с метаданными'); if (onDone) onDone(); return; }
+        if (!window.Lampa || !Lampa.Api || !Lampa.Api.movie) {
+            notify('Lampa.Api.movie недоступен');
+            if (onDone) onDone();
+            return;
+        }
+
+        notify('Загружаю метаданные: 0/' + pending.length);
+        var done = 0;
+        var index = 0;
+
+        function nextOne() {
+            if (index >= pending.length) {
+                saveTop(top);
+                notify('Готово: обновлено ' + done + ' из ' + pending.length);
+                if (onDone) onDone();
+                return;
+            }
+
+            var id = pending[index++];
+
+            function handleData(data) {
+                var card = null;
+                if (data) {
+                    if (data.movie) card = data.movie;
+                    else if (data.card) card = data.card;
+                    else if (data.id) card = data;
+                }
+                if (card && (card.title || card.name)) {
+                    var info = extractCardInfo(card);
+                    if (info) {
+                        info.id = top[id] ? top[id].id : id;
+                        info.place = null;
+                        info.addedAt = top[id] ? top[id].addedAt : Date.now();
+                        top[id] = info;
+                        done++;
+                    }
+                }
+                if (done % 5 === 0 || index === pending.length) {
+                    notify('Загружено: ' + index + '/' + pending.length);
+                }
+                setTimeout(nextOne, 100);
+            }
+
+            try {
+                // Пробуем movie — для фильмов, потом tv — если ничего не нашлось
+                Lampa.Api.movie(id, function (data) {
+                    if (data && (data.movie || data.card || data.id)) {
+                        handleData(data);
+                    } else {
+                        try {
+                            Lampa.Api.tv(id, function (data2) { handleData(data2); });
+                        } catch (e) { handleData(data); }
+                    }
+                });
+            } catch (e) {
+                console.error('[MyTop] enrich error:', e);
+                setTimeout(nextOne, 100);
+            }
+        }
+
+        nextOne();
     }
 
     // ============ КОМПОНЕНТ ============
     function MyTopComponent() {
-        var self = this;
         var html = $('<div class="my-top-page" style="height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;"></div>');
 
         function buildContent() {
             html.empty();
-
             var top = getTop();
             var ids = Object.keys(top);
 
-            // Кнопки
             var buttons = $('<div style="display:flex;flex-wrap:wrap;gap:8px;padding:20px 20px 12px;"></div>');
 
             var btnImport = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>📥 Импорт (viewed)</span></div>');
             btnImport.on('hover:enter click', function () { importFavorites(); buildContent(); });
             buttons.append(btnImport);
+
+            var btnEnrich = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>🔄 Названия</span></div>');
+            btnEnrich.on('hover:enter click', function () { enrichTop(buildContent); });
+            buttons.append(btnEnrich);
 
             var btnDiag = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>🔍 Ключи</span></div>');
             btnDiag.on('hover:enter click', function () { showDiag(); });
@@ -151,12 +209,11 @@
 
             html.append(buttons);
 
-            // Отладка
             html.append('<div style="margin:0 20px 20px;padding:12px;background:rgba(0,0,0,0.3);border-radius:8px;color:#8a8a95;font-size:12px;">' +
-                'Ключ: <code>' + STORAGE_KEY + '</code> · Элементов: <b>' + ids.length + '</b></div>');
+                'Элементов: <b>' + ids.length + '</b></div>');
 
             if (ids.length === 0) {
-                html.append('<div style="padding:40px;text-align:center;color:#8a8a95;">Список пуст. Нажми "📥 Импорт (viewed)".</div>');
+                html.append('<div style="padding:40px;text-align:center;color:#8a8a95;">Список пуст</div>');
                 return;
             }
 
@@ -169,11 +226,9 @@
             });
 
             var list = $('<div style="padding:0 20px 60px;"></div>');
-
             items.forEach(function (item) {
                 var placeText = item.place ? '#' + item.place : '—';
                 var poster = item.poster ? 'https://image.tmdb.org/t/p/w200' + item.poster : '';
-
                 var row = $(
                     '<div style="display:flex;align-items:center;gap:14px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06);">' +
                     '<div style="font-size:22px;font-weight:700;color:#ffdd55;min-width:44px;text-align:center;">' + placeText + '</div>' +
@@ -185,33 +240,41 @@
                 );
                 list.append(row);
             });
-
             html.append(list);
         }
 
         function showDiag() {
-            var keys = Object.keys(localStorage).sort();
             html.empty();
 
             var back = $('<div style="padding:20px;"><div class="full-start__button selector" style="display:inline-block;"><span>← Назад</span></div></div>');
             back.find('.full-start__button').on('hover:enter click', function () { buildContent(); });
             html.append(back);
 
-            html.append('<div style="padding:0 20px 12px;color:#8a8a95;font-size:13px;">Всего ключей: <b style="color:#fff;">' + keys.length + '</b></div>');
+            // Только ключи, связанные с фильмами — не все 266
+            var interesting = ['favorite', 'card', 'cards', 'history', 'viewed', 'like',
+                               'tmdb_cache', 'movie', 'tv', 'last', 'continues', 'bookmarks'];
 
-            keys.forEach(function (k) {
+            var keys = Object.keys(localStorage).sort();
+            var relevant = keys.filter(function (k) {
+                var lk = k.toLowerCase();
+                return interesting.some(function (i) { return lk.indexOf(i) !== -1; });
+            });
+
+            html.append('<div style="padding:0 20px 12px;color:#8a8a95;font-size:13px;">' +
+                'Всего ключей: <b style="color:#fff;">' + keys.length + '</b> · ' +
+                'Относящихся к фильмам: <b style="color:#fff;">' + relevant.length + '</b></div>');
+
+            relevant.forEach(function (k) {
                 var val = localStorage.getItem(k) || '';
-                var preview = val.length > 2000 ? val.substring(0, 2000) + '...' : val;
+                var preview = val.length > 1500 ? val.substring(0, 1500) + '...' : val;
                 preview = preview.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-                var box = $(
+                html.append(
                     '<div style="margin:0 20px 12px;padding:10px;background:rgba(0,0,0,0.35);border-radius:6px;font-family:monospace;font-size:11px;">' +
                     '<div style="color:#ffdd55;font-weight:bold;word-break:break-all;">' + k + '</div>' +
                     '<div style="color:#6a6a75;margin:4px 0;">' + val.length + ' байт</div>' +
                     '<div style="color:#8a8a95;word-break:break-all;">' + preview + '</div>' +
                     '</div>'
                 );
-                html.append(box);
             });
         }
 
@@ -228,16 +291,10 @@
 
     function openTopPage() {
         try {
-            Lampa.Activity.push({
-                url: '',
-                title: '⭐ Мой топ',
-                component: 'my_top_page',
-                data: {}
-            });
+            Lampa.Activity.push({ url: '', title: '⭐ Мой топ', component: 'my_top_page', data: {} });
         } catch (e) { notify('Ошибка открытия: ' + e.message); }
     }
 
-    // ============ КНОПКА-ЗВЕЗДА НА КАРТОЧКЕ ============
     function addButtonToFull(e) {
         if (e.type !== 'complite') return;
         var movie = e.data && e.data.movie ? e.data.movie : null;
@@ -245,16 +302,12 @@
 
         setTimeout(function () {
             if ($('.my-top-btn-card').length > 0) return;
-
             var svg =
                 '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
                 'style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;">' +
                 '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
                 '</svg>';
-
-            var btn = $('<div class="full-start__button selector view--custom my-top-btn-card" ' +
-                'style="display:flex;align-items:center;justify-content:center;">' + svg + '</div>');
-
+            var btn = $('<div class="full-start__button selector view--custom my-top-btn-card" style="display:flex;align-items:center;justify-content:center;">' + svg + '</div>');
             var busy = false;
             btn.on('click', function () {
                 if (busy) return;
@@ -262,14 +315,12 @@
                 setTimeout(function () { busy = false; }, 700);
                 addToTop(movie);
             });
-
             var container = $('.full-start__buttons');
             if (container.length) container.append(btn);
             else $('[class*="full-start"][class*="buttons"]').first().append(btn);
         }, 200);
     }
 
-    // ============ МЕНЮ ============
     function addMenuItem() {
         var attempts = 0, maxAttempts = 20;
         var tryAdd = function () {
@@ -292,7 +343,8 @@
         registerComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
-        notify('⭐ Плагин "Мой топ" v13 запущен');
+        migrateFromV13();
+        notify('⭐ Плагин "Мой топ" v14 запущен');
     }
 
     if (window.appready) startPlugin();

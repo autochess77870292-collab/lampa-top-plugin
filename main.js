@@ -1,10 +1,10 @@
-// main.js — Плагин "Мой топ" для Lampa (v15)
-// Кнопки без эмодзи + диагностика Lampa.Api.
+// main.js — Плагин "Мой топ" для Lampa (v16)
+// Значок в меню + обогащение через Lampa.Api.sources.tmdb
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v15';
-    var STORAGE_KEY = 'my_movie_top_v14'; // сохраняем тот же ключ, чтобы фильмы не пропали
+    var PLUGIN_NAME = 'my_top_v16';
+    var STORAGE_KEY = 'my_movie_top_v14'; // тот же ключ — фильмы не пропадут
 
     function notify(msg) {
         try {
@@ -83,42 +83,39 @@
         notify('Импортировано: ' + added);
     }
 
-    // ============ ДИАГНОСТИКА Lampa.Api ============
-    function diagApi() {
-        var lines = [];
-        if (!window.Lampa) { notify('Lampa нет'); return; }
-        if (!Lampa.Api) { notify('Lampa.Api НЕТ'); return; }
+    // ============ ЗАПРОС В TMDB ============
+    // Пробуем разные варианты сигнатуры, пока один не сработает.
+    function tmdbRequest(id, onSuccess, onFail) {
+        var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
+        if (!tmdb || !tmdb.get) { onFail('нет tmdb.get'); return; }
 
-        var apiKeys = Object.keys(Lampa.Api).sort();
-        lines.push('Lampa.Api: ' + apiKeys.join(', '));
+        // Вариант 1: {method: 'movie', id: id}
+        var attempts = [
+            { method: 'movie', id: id },
+            { method: 'movie', id: id, language: 'ru' },
+            { id: id, method: 'movie' }
+        ];
 
-        if (Lampa.Api.sources) {
-            lines.push('Api.sources: ' + Object.keys(Lampa.Api.sources).join(', '));
+        var idx = 0;
+        function tryNext() {
+            if (idx >= attempts.length) { onFail('все варианты не сработали'); return; }
+            var params = attempts[idx++];
+            try {
+                tmdb.get(params, function (data) {
+                    if (data && (data.title || data.name || data.movie || data.id)) {
+                        onSuccess(data);
+                    } else {
+                        tryNext();
+                    }
+                }, function () { tryNext(); });
+            } catch (e) {
+                tryNext();
+            }
         }
-
-        // Показываем первые 3 уведомления
-        notify('Api: ' + apiKeys.slice(0, 15).join(', '));
-
-        setTimeout(function () {
-            if (Lampa.Api.sources) {
-                notify('Api.sources: ' + Object.keys(Lampa.Api.sources).join(', '));
-            }
-        }, 2600);
-
-        setTimeout(function () {
-            // Пробуем tmdb источник
-            var tmdb = Lampa.Api.sources && Lampa.Api.sources.tmdb;
-            if (tmdb) {
-                notify('tmdb keys: ' + Object.keys(tmdb).slice(0, 15).join(', '));
-            } else {
-                notify('tmdb нет');
-            }
-        }, 5200);
-
-        console.log('[MyTop API]', lines.join('\n'));
+        tryNext();
     }
 
-    // ============ ОБОГАЩЕНИЕ (пока заглушка — выясняем API) ============
+    // ============ ОБОГАЩЕНИЕ ============
     function enrichTop(onDone) {
         var top = getTop();
         var ids = Object.keys(top);
@@ -127,15 +124,42 @@
             return item && item.title && item.title.indexOf('ID ') === 0;
         });
 
-        if (pending.length === 0) {
-            notify('Все уже с метаданными');
-            if (onDone) onDone();
-            return;
-        }
+        if (pending.length === 0) { notify('Все уже с метаданными'); if (onDone) onDone(); return; }
 
-        notify('Нажми "Диагностика API", потом напиши разработчику');
-        diagApi();
-        if (onDone) onDone();
+        notify('Загружаю: 0/' + pending.length);
+        var index = 0, ok = 0, fail = 0;
+
+        function next() {
+            if (index >= pending.length) {
+                saveTop(top);
+                notify('Готово. Успешно: ' + ok + ', ошибок: ' + fail);
+                if (onDone) onDone();
+                return;
+            }
+            var id = pending[index++];
+            tmdbRequest(id, function (data) {
+                var info = extractCardInfo(data.movie || data);
+                if (info && info.id) {
+                    var oldItem = top[id];
+                    info.id = oldItem.id;
+                    info.place = oldItem.place;
+                    info.addedAt = oldItem.addedAt;
+                    top[id] = info;
+                    ok++;
+                } else {
+                    fail++;
+                }
+                if ((index % 10 === 0) || index === pending.length) {
+                    notify('Загружено: ' + index + '/' + pending.length + ' (ок: ' + ok + ')');
+                }
+                setTimeout(next, 80);
+            }, function (reason) {
+                fail++;
+                if (index === 1) notify('Ошибка запроса: ' + reason);
+                setTimeout(next, 80);
+            });
+        }
+        next();
     }
 
     // ============ КОМПОНЕНТ ============
@@ -156,10 +180,6 @@
             var btnEnrich = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Загрузить названия</span></div>');
             btnEnrich.on('hover:enter click', function () { enrichTop(buildContent); });
             buttons.append(btnEnrich);
-
-            var btnDiagApi = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Диагностика API</span></div>');
-            btnDiagApi.on('hover:enter click', function () { diagApi(); });
-            buttons.append(btnDiagApi);
 
             var btnClear = $('<div class="full-start__button selector" style="flex:1;min-width:140px;"><span>Очистить</span></div>');
             btnClear.on('hover:enter click', function () {
@@ -222,6 +242,13 @@
         } catch (e) { notify('Ошибка открытия: ' + e.message); }
     }
 
+    // ============ КНОПКА-ЗВЕЗДА НА КАРТОЧКЕ ============
+    var STAR_SVG =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
+        'style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;">' +
+        '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
+        '</svg>';
+
     function addButtonToFull(e) {
         if (e.type !== 'complite') return;
         var movie = e.data && e.data.movie ? e.data.movie : null;
@@ -229,12 +256,7 @@
 
         setTimeout(function () {
             if ($('.my-top-btn-card').length > 0) return;
-            var svg =
-                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
-                'style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;">' +
-                '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
-                '</svg>';
-            var btn = $('<div class="full-start__button selector view--custom my-top-btn-card" style="display:flex;align-items:center;justify-content:center;">' + svg + '</div>');
+            var btn = $('<div class="full-start__button selector view--custom my-top-btn-card" style="display:flex;align-items:center;justify-content:center;">' + STAR_SVG + '</div>');
             var busy = false;
             btn.on('click', function () {
                 if (busy) return;
@@ -248,6 +270,7 @@
         }, 200);
     }
 
+    // ============ МЕНЮ (со значком-звездой) ============
     function addMenuItem() {
         var attempts = 0, maxAttempts = 20;
         var tryAdd = function () {
@@ -256,7 +279,13 @@
             if (lists.length > 0) {
                 var first = lists.first();
                 if (first.find('.my-top-menu-item').length > 0) return;
-                var item = $('<li class="menu__item selector my-top-menu-item"><div class="menu__text">Мой топ</div></li>');
+
+                var item = $(
+                    '<li class="menu__item selector my-top-menu-item">' +
+                    '<div class="menu__ico">' + STAR_SVG + '</div>' +
+                    '<div class="menu__text">Мой топ</div>' +
+                    '</li>'
+                );
                 item.on('click hover:enter', openTopPage);
                 first.append(item);
             } else if (attempts < maxAttempts) setTimeout(tryAdd, 500);
@@ -270,7 +299,7 @@
         registerComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
-        notify('Плагин "Мой топ" v15 запущен');
+        notify('Плагин "Мой топ" v16 запущен');
     }
 
     if (window.appready) startPlugin();

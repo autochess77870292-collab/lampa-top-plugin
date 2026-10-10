@@ -663,7 +663,6 @@ function editPlace(ids, onDone) {
             registerComponent();
             Lampa.Listener.follow('full', addButtonToFull);
             addMenuItem();
-            notify('Плагин "Мой топ" v29 запущен');
         } catch (e) { console.error('[MyTop] start err:', e); }
     }
     if (window.appready) startPlugin();

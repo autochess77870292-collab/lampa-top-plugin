@@ -1,12 +1,12 @@
-// main.js — Плагин "Метки на постерах" для Lampa (v9)
-// Безопасная версия: без MutationObserver, без патча Lampa.Card.
-// Только периодический сканер DOM + try/catch везде.
+// main.js — Плагин "Метки на постерах" для Lampa (v10)
+// Данные берём из DOM, обогащаем через TMDB search.
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'poster_badges_v9';
+    var PLUGIN_NAME = 'poster_badges_v10';
     var STYLE_ID = 'poster-badges-style';
-    var COL_CACHE_KEY = 'poster_badges_col_v9';
+    var CACHE_KEY = 'poster_badges_cache_v10';
+    var COL_CACHE_KEY = 'poster_badges_col_v10';
 
     function notify(msg) {
         try { if (window.Lampa && Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show(msg); } catch (e) {}
@@ -35,48 +35,135 @@
         } catch (e) { log('injectStyles err', e); }
     }
 
-    // ---------- ДИАГНОСТИКА ----------
-    var diag = {
-        seen: 0,
-        withData: 0,
-        notReleased: 0,
-        badges: 0,
-        colReq: 0,
-        dataKeys: [],
-        instanceKeys: []
-    };
-
-    // ---------- КЭШ КОЛЛЕКЦИЙ ----------
+    // ---------- КЭШИ ----------
+    var enrichCache = {};
     var colCache = {};
     try {
-        var rawCol = localStorage.getItem(COL_CACHE_KEY);
-        if (rawCol) colCache = JSON.parse(rawCol) || {};
-    } catch (e) { colCache = {}; }
+        var r1 = localStorage.getItem(CACHE_KEY);
+        if (r1) enrichCache = JSON.parse(r1) || {};
+        var r2 = localStorage.getItem(COL_CACHE_KEY);
+        if (r2) colCache = JSON.parse(r2) || {};
+    } catch (e) {}
 
-    function saveColCache() {
-        try { localStorage.setItem(COL_CACHE_KEY, JSON.stringify(colCache)); } catch (e) {}
+    var saveTimer = null;
+    function scheduleSave() {
+        if (saveTimer) return;
+        saveTimer = setTimeout(function () {
+            try { localStorage.setItem(CACHE_KEY, JSON.stringify(enrichCache)); } catch (e) {}
+            try { localStorage.setItem(COL_CACHE_KEY, JSON.stringify(colCache)); } catch (e) {}
+            saveTimer = null;
+        }, 800);
     }
 
-    function fetchColCount(colId, cb) {
-        try {
-            if (colCache[colId] !== undefined) { cb(colCache[colId]); return; }
-            var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
-            if (!tmdb || typeof tmdb.get !== 'function') { cb(0); return; }
-            diag.colReq++;
-            tmdb.get('collection/' + colId, function (d) {
-                var n = 0;
-                try {
-                    if (d && d.parts && d.parts.length) n = d.parts.length;
-                    else if (d && d.number_of_items) n = d.number_of_items;
-                } catch (e) {}
-                colCache[colId] = n;
-                saveColCache();
-                cb(n);
-            }, function () { colCache[colId] = 0; saveColCache(); cb(0); });
-        } catch (e) { cb(0); }
+    // ---------- ДИАГНОСТИКА ----------
+    var diag = {
+        scanned: 0,
+        decorated: 0,
+        notReleased: 0,
+        collections: 0,
+        searches: 0,
+        cacheHits: 0,
+        errors: 0
+    };
+
+    // ---------- ЧТЕНИЕ DOM ----------
+    function posterPathFromUrl(url) {
+        if (!url) return '';
+        var m = String(url).match(/\/([a-zA-Z0-9_-]{20,}\.(?:jpg|jpeg|png|webp))/i);
+        return m ? ('/' + m[1]) : '';
     }
 
-    // ---------- ХЕЛПЕРЫ ----------
+    function readCardFromDOM($card) {
+        // Название
+        var title = '';
+        var titleSels = ['.card__title', '.card-title', '[class*="card__title"]', '[class*="card-title"]'];
+        for (var i = 0; i < titleSels.length; i++) {
+            var $t = $card.find(titleSels[i]).first();
+            if ($t.length) { title = ($t.text() || '').trim(); if (title) break; }
+        }
+
+        // Год
+        var year = '';
+        var yearSels = ['.card__date', '.card-date', '[class*="card__date"]', '[class*="card-date"]'];
+        for (var j = 0; j < yearSels.length; j++) {
+            var $y = $card.find(yearSels[j]).first();
+            if ($y.length) {
+                var txt = ($y.text() || '').trim();
+                var m = txt.match(/\b(19|20)\d{2}\b/);
+                if (m) { year = m[0]; break; }
+            }
+        }
+
+        // Постер
+        var src = '';
+        var $img = $card.find('img').first();
+        if ($img.length) src = $img.attr('src') || $img.attr('data-src') || '';
+        var posterPath = posterPathFromUrl(src);
+
+        if (!title) return null;
+        return { title: title, year: year, posterPath: posterPath };
+    }
+
+    // ---------- TMDB SEARCH + FULL ----------
+    var activeRequests = 0;
+    var maxRequests = 3;
+    var requestQueue = [];
+
+    function queueRequest(fn) {
+        requestQueue.push(fn);
+        pumpQueue();
+    }
+    function pumpQueue() {
+        while (activeRequests < maxRequests && requestQueue.length) {
+            var fn = requestQueue.shift();
+            activeRequests++;
+            try {
+                fn(function () {
+                    activeRequests--;
+                    setTimeout(pumpQueue, 150);
+                });
+            } catch (e) {
+                activeRequests--;
+            }
+        }
+    }
+
+    function getTMDB() {
+        return (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
+    }
+
+    function searchAndEnrich(title, year, done) {
+        var tmdb = getTMDB();
+        if (!tmdb || typeof tmdb.search !== 'function') { done(null); return; }
+
+        diag.searches++;
+        var query = { query: title, type: 'movie' };
+        if (year) query.year = year;
+
+        tmdb.search(query, function (res) {
+            var movie = null;
+            try {
+                if (res && Array.isArray(res.results) && res.results.length) {
+                    movie = res.results[0];
+                }
+            } catch (e) {}
+            if (!movie) { done(null); return; }
+
+            // Если у результата уже есть belongs_to_collection и release_date — используем
+            if (movie.release_date && movie.belongs_to_collection !== undefined) {
+                done(movie);
+                return;
+            }
+
+            // Иначе — full для получения полных данных
+            if (typeof tmdb.full !== 'function') { done(movie); return; }
+            tmdb.full({ id: movie.id, method: 'movie', card: {} }, function (full) {
+                done((full && full.movie) || movie);
+            }, function () { done(movie); });
+        }, function () { done(null); });
+    }
+
+    // ---------- ДЕКОРИРОВАНИЕ ----------
     function isReleased(item) {
         try {
             var d = item.release_date || item.first_air_date || '';
@@ -87,54 +174,11 @@
         } catch (e) { return true; }
     }
 
-    function looksLikeMovie(obj) {
-        if (!obj || typeof obj !== 'object') return false;
-        return !!(obj.id && (obj.poster_path || obj.title || obj.name));
-    }
-
-    function findCardData($card) {
-        // 1. jQuery data по известным ключам
-        var keys = ['card', 'instance', 'movie', 'item', 'object', 'data'];
-        for (var i = 0; i < keys.length; i++) {
-            try {
-                var v = $card.data(keys[i]);
-                if (looksLikeMovie(v)) return v;
-                if (v && v.data && looksLikeMovie(v.data)) return v.data;
-            } catch (e) {}
-        }
-
-        // 2. Все data-атрибуты
-        try {
-            var allData = $card.data();
-            if (allData && typeof allData === 'object') {
-                var ks = Object.keys(allData);
-                if (ks.length && diag.instanceKeys.length === 0) diag.instanceKeys = ks.slice(0, 10);
-                for (var j = 0; j < ks.length; j++) {
-                    var obj = allData[ks[j]];
-                    if (looksLikeMovie(obj)) return obj;
-                    if (obj && obj.data && looksLikeMovie(obj.data)) return obj.data;
-                }
-            }
-        } catch (e) {}
-
-        // 3. Ссылки на DOM-элементе
-        try {
-            var el = $card[0];
-            if (el) {
-                if (el.__card && el.__card.data && looksLikeMovie(el.__card.data)) return el.__card.data;
-                if (el.cardInstance && el.cardInstance.data && looksLikeMovie(el.cardInstance.data)) return el.cardInstance.data;
-                if (el.__lampa_card && el.__lampa_card.data && looksLikeMovie(el.__lampa_card.data)) return el.__lampa_card.data;
-            }
-        } catch (e) {}
-
-        return null;
-    }
-
     function findPosterWrap($card) {
         try {
-            var selectors = ['.card__img', '.card-image', '[class*="card__img"]', '[class*="card__poster"]'];
-            for (var i = 0; i < selectors.length; i++) {
-                var $w = $card.find(selectors[i]).first();
+            var sels = ['.card__img', '.card-image', '[class*="card__img"]', '[class*="card__poster"]'];
+            for (var i = 0; i < sels.length; i++) {
+                var $w = $card.find(sels[i]).first();
                 if ($w.length) return $w;
             }
             var $img = $card.find('img').first();
@@ -143,82 +187,125 @@
         return $card;
     }
 
-    // ---------- ОСНОВНАЯ ЛОГИКА ----------
-    function enhanceCardElement($card) {
-        try {
-            if (!$card || !$card.length) return;
-            diag.seen++;
+    function applyBadges($card, data) {
+        if ($card.data('badge-done')) return;
+        var $wrap = findPosterWrap($card);
+        if (!$wrap.length) return;
+        if ($wrap.find('.card__my-badges').length) return;
 
-            if ($card.data('badge-done')) return;
+        var $badges = $('<div class="card__my-badges"></div>');
+        var added = false;
 
-            var data = findCardData($card);
-            if (!data) return;
-            diag.withData++;
+        if (!isReleased(data)) {
+            $badges.append('<div class="card__my-badge card__my-badge--not-released">Не вышло</div>');
+            diag.notReleased++;
+            added = true;
+        }
 
-            if (diag.dataKeys.length === 0) {
-                try { diag.dataKeys = Object.keys(data).slice(0, 15); } catch (e) {}
-            }
-
-            var $wrap = findPosterWrap($card);
-            if (!$wrap.length) return;
-            if ($wrap.find('.card__my-badges').length) return;
-
-            var $badges = $('<div class="card__my-badges"></div>');
-            var added = false;
-
-            if (!isReleased(data)) {
-                $badges.append('<div class="card__my-badge card__my-badge--not-released">Не вышло</div>');
-                diag.notReleased++;
-                added = true;
-            }
-
-            var col = data.belongs_to_collection;
-            if (col && col.id) {
-                added = true;
-                fetchColCount(col.id, function (n) {
-                    try {
+        var col = data.belongs_to_collection;
+        if (col && col.id) {
+            added = true;
+            if (colCache[col.id] !== undefined) {
+                if (colCache[col.id] >= 2) {
+                    $badges.append('<div class="card__my-badge card__my-badge--collection">' + colCache[col.id] + '</div>');
+                    diag.collections++;
+                }
+            } else {
+                var tmdb = getTMDB();
+                if (tmdb && typeof tmdb.get === 'function') {
+                    tmdb.get('collection/' + col.id, function (d) {
+                        var n = 0;
+                        try {
+                            if (d && d.parts && d.parts.length) n = d.parts.length;
+                            else if (d && d.number_of_items) n = d.number_of_items;
+                        } catch (e) {}
+                        colCache[col.id] = n;
+                        scheduleSave();
                         if (n >= 2) {
                             $badges.append('<div class="card__my-badge card__my-badge--collection">' + n + '</div>');
+                            diag.collections++;
                         }
-                    } catch (e) {}
-                });
+                    }, function () { colCache[col.id] = 0; scheduleSave(); });
+                }
             }
+        }
 
-            if (added) {
-                try {
-                    var curPos = $wrap.css('position');
-                    if (!curPos || curPos === 'static') $wrap.css('position', 'relative');
-                } catch (e) {}
-                $wrap.append($badges);
-                $card.data('badge-done', true);
-                diag.badges++;
-            }
-        } catch (e) {
-            log('enhance err', e);
+        if (added) {
+            try {
+                var curPos = $wrap.css('position');
+                if (!curPos || curPos === 'static') $wrap.css('position', 'relative');
+            } catch (e) {}
+            $wrap.append($badges);
+            $card.data('badge-done', true);
+            diag.decorated++;
         }
     }
 
-    function scanAll() {
+    // ---------- ПРОВЕРКА ВИДИМОСТИ ----------
+    function isVisible($card) {
+        try {
+            var el = $card[0];
+            if (!el) return false;
+            var rect = el.getBoundingClientRect();
+            var vh = window.innerHeight || document.documentElement.clientHeight;
+            // Расширяем окно на 200px вверх/вниз — предзагрузка
+            return rect.bottom > -200 && rect.top < vh + 200;
+        } catch (e) { return true; }
+    }
+
+    // ---------- СКАНЕР ----------
+    function scanVisible() {
         try {
             var $cards = $('.card');
             if (!$cards.length) return;
+
             $cards.each(function () {
-                try { enhanceCardElement($(this)); } catch (e) {}
+                var $c = $(this);
+                if ($c.data('badge-done') || $c.data('badge-pending')) return;
+                if (!isVisible($c)) return;
+
+                var info = readCardFromDOM($c);
+                if (!info) return;
+                diag.scanned++;
+
+                // Есть в кэше — применяем сразу
+                if (info.posterPath && enrichCache[info.posterPath]) {
+                    diag.cacheHits++;
+                    applyBadges($c, enrichCache[info.posterPath]);
+                    return;
+                }
+
+                // Иначе — в очередь
+                $c.data('badge-pending', true);
+                queueRequest(function (releaseSlot) {
+                    searchAndEnrich(info.title, info.year, function (movie) {
+                        $c.removeData('badge-pending');
+                        if (!movie) { releaseSlot(); return; }
+                        if (info.posterPath) {
+                            enrichCache[info.posterPath] = {
+                                release_date: movie.release_date || movie.first_air_date || null,
+                                belongs_to_collection: movie.belongs_to_collection || null
+                            };
+                            scheduleSave();
+                        }
+                        applyBadges($c, movie);
+                        releaseSlot();
+                    });
+                });
             });
-        } catch (e) {
-            log('scanAll err', e);
-        }
+        } catch (e) { diag.errors++; log('scan err', e); }
     }
 
+    // ---------- ОТЧЁТ ----------
     function reportDiag() {
         try {
-            notify('Значки: карточек ' + diag.seen
-                + ', с данными ' + diag.withData
-                + ', знаков ' + diag.badges
-                + ', коллекций ' + diag.colReq);
+            notify('Значки: скан ' + diag.scanned
+                + ', знаков ' + diag.decorated
+                + ', не вышло ' + diag.notReleased
+                + ', коллекций ' + diag.collections
+                + ', поисков ' + diag.searches
+                + ', кэш ' + diag.cacheHits);
             log('DIAG', JSON.stringify(diag));
-            log('dataKeys', diag.dataKeys);
-            log('instanceKeys', diag.instanceKeys);
         } catch (e) {}
     }
 
@@ -232,22 +319,20 @@
 
             injectStyles();
 
-            setTimeout(scanAll, 500);
-            setTimeout(scanAll, 1500);
-            setTimeout(scanAll, 3000);
+            setTimeout(scanVisible, 1000);
+            setTimeout(scanVisible, 2500);
+            setTimeout(scanVisible, 5000);
 
             if (!scanInterval) {
                 scanInterval = setInterval(function () {
-                    try { scanAll(); } catch (e) {}
-                }, 2000);
+                    try { scanVisible(); } catch (e) {}
+                }, 2500);
             }
 
-            notify('Плагин "Метки на постерах" v9 запущен');
-            setTimeout(reportDiag, 8000);
-            setTimeout(reportDiag, 20000);
-        } catch (e) {
-            log('startPlugin err', e);
-        }
+            notify('Плагин "Метки на постерах" v10 запущен');
+            setTimeout(reportDiag, 10000);
+            setTimeout(reportDiag, 25000);
+        } catch (e) { log('start err', e); }
     }
 
     try {
@@ -262,7 +347,5 @@
                 else if (t > 40) clearInterval(iv);
             }, 500);
         }
-    } catch (e) {
-        log('bootstrap err', e);
-    }
+    } catch (e) { log('bootstrap err', e); }
 })();

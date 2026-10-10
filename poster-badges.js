@@ -1,29 +1,16 @@
-// main.js — Плагин "Метки на постерах" для Lampa (v5)
+// main.js — Плагин "Метки на постерах" для Lampa (v7)
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'poster_badges_v5';
+    var PLUGIN_NAME = 'poster_badges_v7';
     var STYLE_ID = 'poster-badges-style';
-    var CACHE_KEY = 'poster_badges_cache_v5';
-    var COL_CACHE_KEY = 'poster_badges_col_cache_v5';
+    var COL_CACHE_KEY = 'poster_badges_col_v7';
 
     function notify(msg) {
         try { if (window.Lampa && Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show(msg); } catch (e) {}
     }
-
-    // ---------- КЭШ ----------
-    function readCache(k) { try { var r = localStorage.getItem(k); return r ? JSON.parse(r) : {}; } catch (e) { return {}; } }
-    function writeCache(k, o) { try { localStorage.setItem(k, JSON.stringify(o)); } catch (e) {} }
-    var posterCache = readCache(CACHE_KEY);
-    var colCache = readCache(COL_CACHE_KEY);
-    var saveTimer = null;
-    function scheduleSave() {
-        if (saveTimer) return;
-        saveTimer = setTimeout(function () {
-            writeCache(CACHE_KEY, posterCache);
-            writeCache(COL_CACHE_KEY, colCache);
-            saveTimer = null;
-        }, 500);
+    function log() {
+        try { console.log.apply(console, ['[Badges]'].concat(Array.prototype.slice.call(arguments))); } catch (e) {}
     }
 
     // ---------- СТИЛИ ----------
@@ -41,207 +28,194 @@
         $('<style>').attr('id', STYLE_ID).text(css).appendTo('head');
     }
 
-    function posterPathFromUrl(url) {
-        if (!url) return '';
-        var s = String(url);
-        var m = s.match(/\/([a-zA-Z0-9_-]{20,}\.(?:jpg|jpeg|png|webp))/i);
-        if (m) return '/' + m[1];
-        return '';
+    // ---------- ДИАГНОСТИКА ----------
+    var diag = {
+        patchOK: false,
+        cardsBuilt: 0,
+        cardsWithData: 0,
+        cardsNotReleased: 0,
+        badgesAdded: 0,
+        colRequests: 0,
+        lastDataKeys: [],
+        lastHtmlClasses: []
+    };
+
+    // ---------- КЭШ КОЛЛЕКЦИЙ ----------
+    var colCache = (function () {
+        try { return JSON.parse(localStorage.getItem(COL_CACHE_KEY) || '{}'); }
+        catch (e) { return {}; }
+    })();
+    function saveColCache() {
+        try { localStorage.setItem(COL_CACHE_KEY, JSON.stringify(colCache)); } catch (e) {}
     }
-
-    // ---------- КЭШИРОВАНИЕ ----------
-    function cacheItem(item) {
-        if (!item) return;
-        var pp = item.poster_path;
-        if (!pp) return;
-        posterCache[pp] = {
-            id: item.id,
-            poster: pp,
-            release: item.release_date || item.first_air_date || null,
-            collection: item.belongs_to_collection || null,
-            isTV: !!(item.name || item.first_air_date)
-        };
-        scheduleSave();
-    }
-
-    function cacheAny(data) {
-        if (!data) return;
-        if (Array.isArray(data)) { data.forEach(cacheItem); return; }
-        if (typeof data !== 'object') return;
-        if (Array.isArray(data.results)) data.results.forEach(cacheItem);
-        if (Array.isArray(data.items)) data.items.forEach(cacheItem);
-        if (Array.isArray(data.cards)) data.cards.forEach(cacheItem);
-        if (Array.isArray(data.data)) data.data.forEach(cacheItem);
-        if (data.movie) cacheItem(data.movie);
-        if (data.card) cacheItem(data.card);
-        if (data.id && data.poster_path) cacheItem(data);
-    }
-
-    // ---------- ГЛУБОКАЯ ОБЁРТКА ----------
-    function wrapFn(obj, key, tag) {
-        if (!obj || typeof obj[key] !== 'function') return false;
-        if (obj['__pbwrap_' + key]) return false;
-        var orig = obj[key];
-        obj[key] = function () {
-            var args = Array.prototype.slice.call(arguments);
-            var cbIdx = -1;
-            for (var i = 0; i < args.length; i++) {
-                if (typeof args[i] === 'function') { cbIdx = i; break; }
-            }
-            if (cbIdx === -1) return orig.apply(this, args);
-            var origCb = args[cbIdx];
-            args[cbIdx] = function (data) {
-                try { cacheAny(data); } catch (e) {}
-                return origCb.apply(this, arguments);
-            };
-            return orig.apply(this, args);
-        };
-        obj['__pbwrap_' + key] = true;
-        return true;
-    }
-
-    function wrapApi() {
-        if (!window.Lampa || !Lampa.Api) return false;
-        var ok = false;
-
-        // Верхний уровень Lampa.Api
-        ['list', 'category', 'get', 'full', 'main', 'similar', 'search', 'collections', 'collection'].forEach(function (m) {
-            if (wrapFn(Lampa.Api, m, 'api')) ok = true;
-        });
-
-        // Все источники (tmdb, cub, filmix и т.д.)
-        if (Lampa.Api.sources) {
-            Object.keys(Lampa.Api.sources).forEach(function (sname) {
-                var src = Lampa.Api.sources[sname];
-                if (!src || typeof src !== 'object') return;
-                ['list', 'category', 'get', 'full', 'main', 'similar', 'search', 'collection', 'collections'].forEach(function (m) {
-                    if (wrapFn(src, m, sname)) ok = true;
-                });
-            });
-        }
-
-        return ok;
-    }
-
-    // ---------- ЗАПРОС КОЛЛЕКЦИИ ----------
     function fetchColCount(colId, cb) {
         if (colCache[colId] !== undefined) { cb(colCache[colId]); return; }
         var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
         if (!tmdb || !tmdb.get) { cb(0); return; }
+        diag.colRequests++;
         try {
             tmdb.get('collection/' + colId, function (d) {
                 var n = 0;
                 if (d && d.parts && d.parts.length) n = d.parts.length;
                 else if (d && d.number_of_items) n = d.number_of_items;
-                colCache[colId] = n; scheduleSave(); cb(n);
-            }, function () { colCache[colId] = 0; scheduleSave(); cb(0); });
+                colCache[colId] = n; saveColCache(); cb(n);
+            }, function () { colCache[colId] = 0; saveColCache(); cb(0); });
         } catch (e) { cb(0); }
     }
 
-    // ---------- УКРАШЕНИЕ КАРТОЧКИ ----------
-    function decorateCard($card) {
+    // ---------- ЛОГИКА ЗНАЧКОВ ----------
+    function isReleased(item) {
+        var d = item.release_date || item.first_air_date || '';
+        if (!d) return true;
+        var ts = Date.parse(d);
+        if (isNaN(ts)) return true;
+        return ts <= Date.now();
+    }
+
+    function findPosterWrap($card) {
+        var selectors = ['.card__img', '.card-image', '[class*="card__img"]', '[class*="card__poster"]'];
+        for (var i = 0; i < selectors.length; i++) {
+            var $w = $card.find(selectors[i]).first();
+            if ($w.length) return $w;
+        }
+        var $img = $card.find('img').first();
+        if ($img.length) return $img.parent();
+        return $card;
+    }
+
+    function enhanceCard(inst) {
+        if (!inst || !inst.html) return;
+        var $card = inst.html;
         if (!$card || !$card.length) return;
+
+        diag.cardsBuilt++;
+
+        var data = inst.data || inst.movie || inst.item || null;
+        if (!data) { log('нет data'); return; }
+        diag.cardsWithData++;
+        try { diag.lastDataKeys = Object.keys(data).slice(0, 20); } catch (e) {}
+
         if ($card.data('badge-done')) return;
 
-        var $img = $card.find('img').first();
-        var src = $img.length ? ($img.attr('src') || '') : '';
-        if (!src) {
-            var $w = $card.find('[class*="card__img"], .card__img').first();
-            if ($w.length) {
-                var bg = $w.css('background-image') || '';
-                var m = bg.match(/url\(["']?([^"')]+)["']?\)/);
-                if (m) src = m[1];
-            }
-        }
-        if (!src) return;
-
-        var pPath = posterPathFromUrl(src);
-        if (!pPath) return;
-
-        var info = posterCache[pPath];
-        if (!info) return;
-
-        $card.data('badge-done', true);
-
-        var $wrap = $card.find('.card__img').first();
-        if (!$wrap.length) $wrap = $img.parent();
-        if (!$wrap.length) $wrap = $card;
+        var $wrap = findPosterWrap($card);
+        if (!$wrap.length) { log('нет wrap'); return; }
+        try { diag.lastHtmlClasses = ($wrap.attr('class') || '').split(' ').slice(0, 6); } catch (e) {}
         if ($wrap.find('.card__my-badges').length) return;
 
         var $badges = $('<div class="card__my-badges"></div>');
+        var added = false;
 
-        if (info.release) {
-            var ts = Date.parse(info.release);
-            if (!isNaN(ts) && ts > Date.now()) {
-                $badges.append('<div class="card__my-badge card__my-badge--not-released">Не вышло</div>');
-            }
+        // "Не вышло"
+        if (!isReleased(data)) {
+            $badges.append('<div class="card__my-badge card__my-badge--not-released">Не вышло</div>');
+            diag.cardsNotReleased++;
+            added = true;
         }
-        $wrap.append($badges);
 
-        if (info.collection && info.collection.id) {
-            fetchColCount(info.collection.id, function (n) {
+        // Коллекция
+        var col = data.belongs_to_collection;
+        if (col && col.id) {
+            added = true;
+            fetchColCount(col.id, function (n) {
                 if (n >= 2) {
                     $badges.append('<div class="card__my-badge card__my-badge--collection">' + n + '</div>');
+                    diag.badgesAdded++;
                 }
             });
         }
+
+        if (added) {
+            // выравниваем позиционирование
+            var curPos = $wrap.css('position');
+            if (!curPos || curPos === 'static') $wrap.css('position', 'relative');
+            $wrap.append($badges);
+            $card.data('badge-done', true);
+            diag.badgesAdded++;
+        }
     }
 
-    // ---------- СКАНЕР ----------
-    function scanCards() {
-        try { $('.card').each(function () { decorateCard($(this)); }); } catch (e) {}
+    // ---------- ПЕРЕХВАТ КОНСТРУКТОРА ----------
+    function wrapCardConstructor() {
+        if (diag.patchOK) return true;
+        if (!window.Lampa || !Lampa.Card) { log('нет Lampa.Card'); return false; }
+
+        var Orig = Lampa.Card;
+
+        function WrappedCard(object) {
+            var inst = new Orig(object);
+
+            var origBuild = inst.build;
+            inst.build = function () {
+                var r;
+                try { r = origBuild.apply(inst, arguments); }
+                catch (e) { log('build err', e); return; }
+                setTimeout(function () {
+                    try { enhanceCard(inst); } catch (e) { log('enhance err', e); }
+                }, 0);
+                return r;
+            };
+
+            setTimeout(function () {
+                try { enhanceCard(inst); } catch (e) {}
+            }, 300);
+
+            return inst;
+        }
+
+        WrappedCard.prototype = Orig.prototype;
+        for (var k in Orig) {
+            if (Object.prototype.hasOwnProperty.call(Orig, k)) WrappedCard[k] = Orig[k];
+        }
+
+        Lampa.Card = WrappedCard;
+        diag.patchOK = true;
+        log('Lampa.Card перехвачен');
+        return true;
     }
 
-    // ---------- OBSERVER ----------
-    var obs = null;
-    function startObserver() {
-        if (obs) return;
-        try {
-            obs = new MutationObserver(function (muts) {
-                var hit = false;
-                for (var i = 0; i < muts.length; i++) {
-                    var m = muts[i];
-                    for (var j = 0; j < m.addedNodes.length; j++) {
-                        var n = m.addedNodes[j];
-                        if (n.nodeType === 1 && ($(n).hasClass('card') || $(n).find('.card').length > 0)) { hit = true; break; }
-                    }
-                    if (hit) break;
-                }
-                if (hit) scanCards();
-            });
-            obs.observe(document.body, { childList: true, subtree: true });
-        } catch (e) {}
-    }
-
-    function subscribeEvents() {
-        if (!window.Lampa || !Lampa.Listener || !Lampa.Listener.follow) return;
-        ['complite', 'line', 'movie', 'card', 'category', 'main', 'content'].forEach(function (evt) {
-            try { Lampa.Listener.follow(evt, function () { setTimeout(scanCards, 200); }); } catch (e) {}
+    // ---------- РЕТРО-СКАН ----------
+    function retroScan() {
+        $('.card').each(function () {
+            var $c = $(this);
+            if ($c.data('badge-done')) return;
+            var inst = $c.data('card-instance') || $c.data('card') || $c.data('instance');
+            if (inst) { try { enhanceCard(inst); } catch (e) {} }
         });
     }
 
-    function runDiagnostics() {
-        var cards = $('.card').length;
-        var ck = Object.keys(posterCache).length;
-        notify('Значки: карточек ' + cards + ', в кэше ' + ck);
+    // ---------- ОТЧЁТ ----------
+    function reportDiag() {
+        notify('Значки: патч ' + (diag.patchOK ? 'OK' : 'FAIL')
+            + ', карточек ' + diag.cardsBuilt
+            + ', с данными ' + diag.cardsWithData
+            + ', не вышло ' + diag.cardsNotReleased
+            + ', коллекций ' + diag.colRequests);
+        log('DIAG', JSON.stringify(diag));
+        log('lastDataKeys', diag.lastDataKeys);
+        log('lastHtmlClasses', diag.lastHtmlClasses);
     }
 
+    // ---------- СТАРТ ----------
     function startPlugin() {
         if (window[PLUGIN_NAME]) return;
         window[PLUGIN_NAME] = true;
 
         injectStyles();
-        var wrapped = wrapApi();
-        subscribeEvents();
-        startObserver();
 
-        setTimeout(scanCards, 500);
-        setTimeout(scanCards, 1500);
-        setTimeout(scanCards, 3000);
-        setInterval(scanCards, 2000);
+        var ok = wrapCardConstructor();
+        if (!ok) {
+            var tries = 0;
+            var iv = setInterval(function () {
+                tries++;
+                if (wrapCardConstructor() || tries > 40) clearInterval(iv);
+            }, 500);
+        }
 
-        notify('Плагин "Метки на постерах" v5 запущен');
-        setTimeout(runDiagnostics, 6000);
+        setInterval(retroScan, 3000);
+
+        notify('Плагин "Метки на постерах" v7 запущен (патч ' + (diag.patchOK ? 'OK' : '...') + ')');
+        setTimeout(reportDiag, 8000);
+        setTimeout(reportDiag, 20000);
     }
 
     if (window.appready) startPlugin();

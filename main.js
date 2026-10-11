@@ -1,9 +1,10 @@
-// main.js — Плагин "Мой топ" для Lampa (v29)
+// main.js — Плагин "Мой топ" для Lampa (v30) с LLM-рекомендациями
 (function () {
     'use strict';
 
-    var PLUGIN_NAME = 'my_top_v29';
+    var PLUGIN_NAME = 'my_top_v30';
     var STORAGE_KEY = 'my_movie_top_v14';
+    var LLM_KEY = 'my_top_llm_settings';
 
     function notify(msg) {
         try { if (window.Lampa && Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show(msg); } catch (e) {}
@@ -19,6 +20,16 @@
     }
     function saveTop(t) { return rawSet(STORAGE_KEY, JSON.stringify(t)); }
 
+    function getLLMSettings() {
+        var s = parseJSON(rawGet(LLM_KEY, '{}'), {});
+        return {
+            apiUrl: s.apiUrl || '',
+            apiKey: s.apiKey || '',
+            model: s.model || 'gpt-4o-mini'
+        };
+    }
+    function saveLLMSettings(s) { rawSet(LLM_KEY, JSON.stringify(s)); }
+
     function shieldInput($el) {
         $el.on('keydown keyup keypress input', function (e) { e.stopPropagation(); });
         return $el;
@@ -32,14 +43,13 @@
         });
         return $el;
     }
+
     function posterUrl(path, size) {
         if (!path) return '';
         size = size || 'w300';
         var clean = String(path).replace(/^\/+/, '');
         try { if (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb && typeof Lampa.Api.sources.tmdb.img === 'function') { var u = Lampa.Api.sources.tmdb.img(path, size); if (u && typeof u === 'string') return u; } } catch (e) {}
         try { if (window.Lampa && Lampa.Api && typeof Lampa.Api.img === 'function') { var u2 = Lampa.Api.img(path, size); if (u2 && typeof u2 === 'string') return u2; } } catch (e) {}
-        try { if (window.Lampa && Lampa.Utils && typeof Lampa.Utils.img === 'function') { var u3 = Lampa.Utils.img(path, size); if (u3 && typeof u3 === 'string') return u3; } } catch (e) {}
-        try { if (window.Lampa && Lampa.TMDB && typeof Lampa.TMDB.image === 'function') { var u4 = Lampa.TMDB.image('/t/p/' + size + '/' + clean); if (u4 && typeof u4 === 'string') return u4; } } catch (e) {}
         return 'https://image.tmdb.org/t/p/' + size + '/' + clean;
     }
 
@@ -70,6 +80,7 @@
         saveTop(top);
         notify('"' + info.title + '" → в топе (' + Object.keys(top).length + ')');
     }
+
     function importFavorites(silent) {
         try {
             var fav = parseJSON(rawGet('favorite', ''), null);
@@ -89,8 +100,9 @@
             if (added > 0) saveTop(top);
             if (!silent && added > 0) notify('Импортировано: ' + added);
             return added;
-        } catch (e) { console.error('[MyTop] import err:', e); return 0; }
+        } catch (e) { return 0; }
     }
+
     function fetchTMDB(id, onSuccess, onFail) {
         try {
             var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
@@ -99,10 +111,10 @@
             var idx = 0;
             function tryNext() {
                 if (idx >= attempts.length) { onFail('не найдено'); return; }
-                var params = attempts[idx++];
+                var p = attempts[idx++];
                 try {
-                    tmdb.full(params, function (data) {
-                        if (data && (data.title || data.name || data.movie)) onSuccess(data.movie || data);
+                    tmdb.full(p, function (d) {
+                        if (d && (d.title || d.name || d.movie)) onSuccess(d.movie || d);
                         else tryNext();
                     }, function () { tryNext(); });
                 } catch (e) { tryNext(); }
@@ -110,6 +122,7 @@
             tryNext();
         } catch (e) { onFail('exception'); }
     }
+
     function enrichTop(onDone) {
         var top = getTop();
         var pending = Object.keys(top).filter(function (id) {
@@ -141,9 +154,7 @@
                     top[id] = info;
                     ok++;
                 } else { if (top[id]) top[id].collectionChecked = true; fail++; }
-                if ((index % 10 === 0) || index === pending.length) {
-                    notify('Загружено: ' + index + '/' + pending.length + ' (ОК: ' + ok + ')');
-                }
+                if ((index % 10 === 0) || index === pending.length) notify('Загружено: ' + index + '/' + pending.length + ' (ОК: ' + ok + ')');
                 setTimeout(next, 80);
             }, function () {
                 if (top[id]) top[id].collectionChecked = true;
@@ -152,79 +163,53 @@
         }
         next();
     }
-
-    // ============ UNITS (коллекции только если 2+ части) ============
-    function getUnits() {
-        var top = getTop();
-        var colMap = {};
-        var order = [];
-        Object.keys(top).forEach(function (id) {
-            var item = top[id];
-            if (item.collectionId && item.collectionId > 0) {
-                if (!colMap[item.collectionId]) {
-                    colMap[item.collectionId] = [];
-                    order.push({ type: 'col', cid: item.collectionId });
-                }
-                colMap[item.collectionId].push(id);
-            } else {
-                order.push({ type: 'single', id: id });
+// ============ UNITS ============
+function getUnits() {
+    var top = getTop();
+    var colMap = {}, order = [];
+    Object.keys(top).forEach(function (id) {
+        var item = top[id];
+        if (item.collectionId && item.collectionId > 0) {
+            if (!colMap[item.collectionId]) { colMap[item.collectionId] = []; order.push({ type: 'col', cid: item.collectionId }); }
+            colMap[item.collectionId].push(id);
+        } else order.push({ type: 'single', id: id });
+    });
+    var units = [];
+    order.forEach(function (o) {
+        if (o.type === 'single') {
+            var it = top[o.id];
+            units.push({ ids: [o.id], isCollection: false, title: it.title, year: it.year, poster: it.poster, place: it.place, addedAt: it.addedAt || 0, note: it.note || '' });
+        } else {
+            var ids = colMap[o.cid];
+            if (ids.length < 2) {
+                var it2 = top[ids[0]];
+                units.push({ ids: [ids[0]], isCollection: false, title: it2.title, year: it2.year, poster: it2.poster, place: it2.place, addedAt: it2.addedAt || 0, note: it2.note || '' });
+                return;
             }
-        });
+            ids.sort(function (a, b) { return (parseInt(top[a].year, 10) || 9999) - (parseInt(top[b].year, 10) || 9999); });
+            var first = top[ids[0]];
+            var p = null;
+            for (var i = 0; i < ids.length; i++) { if (top[ids[i]].place) { p = top[ids[i]].place; break; } }
+            var minAdded = Infinity;
+            ids.forEach(function (x) { if ((top[x].addedAt || 0) < minAdded) minAdded = top[x].addedAt || 0; });
+            var notes = [];
+            ids.forEach(function (x) { if (top[x].note) notes.push(top[x].note); });
+            units.push({ ids: ids, isCollection: true, collectionId: o.cid, title: first.collectionName || first.title, year: first.year, poster: first.poster, place: p, addedAt: minAdded, count: ids.length, note: notes.join(' • ') });
+        }
+    });
+    return units;
+}
+function getSortedUnits() {
+    var units = getUnits();
+    units.sort(function (a, b) {
+        if (a.place && b.place) return a.place - b.place;
+        if (a.place) return -1;
+        if (b.place) return 1;
+        return (a.addedAt || 0) - (b.addedAt || 0);
+    });
+    return units;
+}
 
-        var units = [];
-        order.forEach(function (o) {
-            if (o.type === 'single') {
-                var it = top[o.id];
-                units.push({
-                    ids: [o.id], isCollection: false,
-                    title: it.title, year: it.year, poster: it.poster,
-                    place: it.place, addedAt: it.addedAt || 0,
-                    note: it.note || ''
-                });
-            } else {
-                var ids = colMap[o.cid];
-                // Коллекция только если реально 2+ фильма в топе
-                if (ids.length < 2) {
-                    var it2 = top[ids[0]];
-                    units.push({
-                        ids: [ids[0]], isCollection: false,
-                        title: it2.title, year: it2.year, poster: it2.poster,
-                        place: it2.place, addedAt: it2.addedAt || 0,
-                        note: it2.note || ''
-                    });
-                    return;
-                }
-                ids.sort(function (a, b) {
-                    return (parseInt(top[a].year, 10) || 9999) - (parseInt(top[b].year, 10) || 9999);
-                });
-                var first = top[ids[0]];
-                var p = null;
-                for (var i = 0; i < ids.length; i++) { if (top[ids[i]].place) { p = top[ids[i]].place; break; } }
-                var minAdded = Infinity;
-                ids.forEach(function (x) { if ((top[x].addedAt || 0) < minAdded) minAdded = top[x].addedAt || 0; });
-                var notes = [];
-                ids.forEach(function (x) { if (top[x].note) notes.push(top[x].note); });
-                units.push({
-                    ids: ids, isCollection: true, collectionId: o.cid,
-                    title: first.collectionName || first.title,
-                    year: first.year, poster: first.poster,
-                    place: p, addedAt: minAdded, count: ids.length,
-                    note: notes.join(' • ')
-                });
-            }
-        });
-        return units;
-    }
-    function getSortedUnits() {
-        var units = getUnits();
-        units.sort(function (a, b) {
-            if (a.place && b.place) return a.place - b.place;
-            if (a.place) return -1;
-            if (b.place) return 1;
-            return (a.addedAt || 0) - (b.addedAt || 0);
-        });
-        return units;
-    }
 // ============ КОПИРОВАНИЕ ============
 function copyToClipboard(text, onOk, onFail) {
     try {
@@ -238,11 +223,8 @@ function copyToClipboard(text, onOk, onFail) {
 function fallbackCopy(text, onOk, onFail) {
     try {
         var ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
         var ok = document.execCommand('copy');
         document.body.removeChild(ta);
         if (ok) onOk(); else onFail();
@@ -271,23 +253,252 @@ function buildTopText(withNotes) {
     return lines.join('\n');
 }
 
-// ============ МОДАЛКА ЗАМЕТКИ (одиночная) ============
+// ============ LLM ЗАПРОС ============
+function buildLLMPrompt() {
+    var text = buildTopText(true);
+    return 'Ты — эксперт по кино. Вот мой персональный топ фильмов и сериалов (от лучшего к худшему):\n\n' + text +
+        '\n\nПорекомендуй мне 10 фильмов или сериалов, которых НЕТ в этом списке, опираясь на жанры, темы и стиль моего топа.' +
+        '\n\nОтветь СТРОГО в формате JSON, без markdown и без пояснений вокруг:' +
+        '\n{"recommendations":[{"title":"Название","year":"2020","reason":"Почему подходит (1 предложение)"}]}';
+}
+
+// Отправка HTTP-запроса с обходом CORS через Lampa.Request.native, если доступно
+function httpPost(url, headers, bodyStr, onOk, onErr) {
+    // 1. Попытка через Lampa.Request.native
+    try {
+        if (window.Lampa && Lampa.Request && typeof Lampa.Request.native === 'function') {
+            Lampa.Request.native(url, function (response) {
+                try { onOk(typeof response === 'string' ? response : JSON.stringify(response)); }
+                catch (e) { onErr('parse ' + e.message); }
+            }, function (e) { onErr('native ' + (e && e.message ? e.message : 'fail')); },
+            { method: 'POST', headers: headers, body: bodyStr });
+            return;
+        }
+    } catch (e) {}
+
+    // 2. Fallback: fetch
+    try {
+        fetch(url, { method: 'POST', headers: headers, body: bodyStr })
+            .then(function (r) { return r.text(); })
+            .then(function (t) { onOk(t); })
+            .catch(function (e) { onErr('fetch ' + e.message); });
+        return;
+    } catch (e) {}
+
+    onErr('нет способа отправить запрос');
+}
+
+function requestRecommendations(onOk, onErr) {
+    var s = getLLMSettings();
+    if (!s.apiUrl || !s.apiKey) {
+        onErr('Укажи API URL и ключ в настройках');
+        return;
+    }
+    var url = s.apiUrl.replace(/\/+$/, '') + '/chat/completions';
+    var headers = {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + s.apiKey
+    };
+    var body = JSON.stringify({
+        model: s.model,
+        messages: [{ role: 'user', content: buildLLMPrompt() }],
+        temperature: 0.7
+    });
+
+    notify('Запрос к нейросети...');
+    httpPost(url, headers, body, function (text) {
+        try {
+            var resp = JSON.parse(text);
+            var content = '';
+            if (resp.choices && resp.choices[0] && resp.choices[0].message) {
+                content = resp.choices[0].message.content || '';
+            } else if (resp.content) {
+                content = resp.content;
+            } else {
+                onErr('Неожиданный формат ответа');
+                return;
+            }
+            // Чистим от markdown-обёртки
+            content = content.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+            // Извлекаем JSON
+            var firstBrace = content.indexOf('{');
+            var lastBrace = content.lastIndexOf('}');
+            if (firstBrace === -1 || lastBrace === -1) {
+                onErr('Ответ не содержит JSON');
+                return;
+            }
+            var json = JSON.parse(content.substring(firstBrace, lastBrace + 1));
+            if (!json.recommendations || !Array.isArray(json.recommendations)) {
+                onErr('Нет массива recommendations');
+                return;
+            }
+            onOk(json.recommendations);
+        } catch (e) {
+            onErr('Парсинг: ' + e.message);
+        }
+    }, onErr);
+}
+// ============ НАСТРОЙКИ LLM ============
+function openLLMSettings(onDone) {
+    var s = getLLMSettings();
+    var modal = $('<div>').css({
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)',
+        zIndex: 100001, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
+    });
+    var box = $('<div>').css({
+        background: '#1c1c22', borderRadius: '12px', padding: '20px',
+        width: '100%', maxWidth: '520px', maxHeight: '85vh', overflowY: 'auto'
+    });
+    box.append($('<div>').css({ color: '#fff', fontSize: '18px', marginBottom: '16px' }).text('Настройки нейросети'));
+
+    function field(label, placeholder, value, isPassword) {
+        var wrap = $('<div>').css({ marginBottom: '14px' });
+        wrap.append($('<div>').css({ color: '#8a8a95', fontSize: '12px', marginBottom: '6px' }).text(label));
+        var input = $('<input>').attr('type', isPassword ? 'password' : 'text').attr('placeholder', placeholder).css({
+            width: '100%', background: '#0f0f12', color: '#e8e8ec',
+            border: '1px solid #2c2c34', borderRadius: '8px', padding: '10px',
+            fontSize: '14px', outline: 'none', boxSizing: 'border-box'
+        }).val(value || '');
+        shieldInput(input);
+        wrap.append(input);
+        return { wrap: wrap, input: input };
+    }
+
+    var fUrl = field('API URL (пример: https://api.deepseek.com/v1)', 'https://api.deepseek.com/v1', s.apiUrl);
+    var fKey = field('API Key', 'sk-...', s.apiKey, true);
+    var fModel = field('Модель', 'deepseek-chat', s.model);
+
+    box.append(fUrl.wrap).append(fKey.wrap).append(fModel.wrap);
+    box.append($('<div>').css({ color: '#8a8a95', fontSize: '11px', lineHeight: '1.5', marginTop: '6px' })
+        .html('Подходит любой OpenAI-совместимый API: DeepSeek, OpenRouter, Groq, Together, локальный сервер. Ключ хранится только на этом устройстве.'));
+
+    var btnRow = $('<div>').css({ display: 'flex', gap: '8px', marginTop: '18px', justifyContent: 'flex-end' });
+    var btnCancel = $('<div class="full-start__button selector"><span>Отмена</span></div>');
+    var btnSave = $('<div class="full-start__button selector"><span>Сохранить</span></div>');
+    btnRow.append(btnCancel).append(btnSave);
+    box.append(btnRow);
+    modal.append(box);
+    $('body').append(modal);
+    modal.on('keydown keyup keypress', function (e) { e.stopPropagation(); });
+
+    onceClick(btnCancel, function () { modal.remove(); });
+    onceClick(btnSave, function () {
+        saveLLMSettings({
+            apiUrl: fUrl.input.val().trim(),
+            apiKey: fKey.input.val().trim(),
+            model: fModel.input.val().trim() || 'gpt-4o-mini'
+        });
+        modal.remove();
+        notify('Настройки сохранены');
+        if (onDone) onDone();
+    });
+}
+
+// ============ ОКНО РЕКОМЕНДАЦИЙ ============
+function showRecommendations(recs, onAddToTop) {
+    var modal = $('<div>').css({
+        position: 'fixed', inset: 0, background: '#0f0f12',
+        zIndex: 100001, display: 'flex', flexDirection: 'column', padding: '0'
+    });
+    var header = $('<div>').css({
+        padding: '16px 20px', background: '#1a1a20',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+    });
+    header.append($('<div>').css({ color: '#fff', fontSize: '18px' }).text('Рекомендации (' + recs.length + ')'));
+    var btnClose = $('<div class="full-start__button selector"><span>Закрыть</span></div>');
+    onceClick(btnClose, function () { modal.remove(); });
+    header.append(btnClose);
+    modal.append(header);
+
+    var body = $('<div>').css({ flex: 1, overflowY: 'auto', padding: '16px 20px 60px' });
+    modal.append(body);
+
+    recs.forEach(function (rec, idx) {
+        var row = $('<div>').css({
+            display: 'flex', gap: '14px', padding: '14px',
+            background: '#1c1c22', borderRadius: '10px',
+            marginBottom: '12px', alignItems: 'flex-start'
+        });
+        var posterBox = $('<div>').css({
+            width: '70px', height: '105px', borderRadius: '6px', flexShrink: 0,
+            background: 'rgba(255,255,255,0.05)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#6a6a75', fontSize: '10px', textAlign: 'center'
+        }).text('…');
+        row.append(posterBox);
+
+        var info = $('<div>').css({ flex: 1, minWidth: 0 });
+        info.append($('<div>').css({ color: '#fff', fontSize: '15px', fontWeight: '600' }).text(rec.title || '?'));
+        info.append($('<div>').css({ color: '#8a8a95', fontSize: '12px', marginTop: '2px' }).text(rec.year || ''));
+        info.append($('<div>').css({ color: '#b0b0b8', fontSize: '13px', marginTop: '8px', lineHeight: '1.4' }).text(rec.reason || ''));
+        row.append(info);
+
+        var btnBox = $('<div>').css({ display: 'flex', flexDirection: 'column', gap: '6px' });
+        var btnAdd = $('<div class="full-start__button selector" style="padding:8px 12px;"><span style="font-size:12px;">В топ</span></div>');
+        onceClick(btnAdd, function () {
+            if (rec._card) {
+                onAddToTop(rec._card);
+            } else {
+                notify('Данные ещё загружаются');
+            }
+        });
+        btnBox.append(btnAdd);
+        row.append(btnBox);
+
+        body.append(row);
+
+        // Поиск в TMDB, чтобы получить данные карточки
+        searchTMDBForRecommendation(rec, function (card) {
+            if (card) {
+                rec._card = card;
+                var src = posterUrl(card.poster_path, 'w200');
+                if (src) {
+                    var img = $('<img>').attr('src', src).css({
+                        width: '100%', height: '100%', objectFit: 'cover', borderRadius: '6px'
+                    });
+                    img.on('error', function () { img.remove(); posterBox.text('нет'); });
+                    posterBox.empty().append(img);
+                } else {
+                    posterBox.text('нет');
+                }
+            } else {
+                posterBox.text('не найдено');
+            }
+        });
+    });
+
+    $('body').append(modal);
+}
+
+function searchTMDBForRecommendation(rec, done) {
+    var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
+    if (!tmdb || typeof tmdb.search !== 'function') { done(null); return; }
+    try {
+        tmdb.search({ query: rec.title, type: 'movie' }, function (res) {
+            var m = null;
+            try {
+                if (res && res.results && res.results.length) m = res.results[0];
+            } catch (e) {}
+            if (!m) { done(null); return; }
+            // Получаем полные данные
+            if (typeof tmdb.full === 'function') {
+                tmdb.full({ id: m.id, method: 'movie', card: {} }, function (full) {
+                    done((full && full.movie) || m);
+                }, function () { done(m); });
+            } else { done(m); }
+        }, function () { done(null); });
+    } catch (e) { done(null); }
+}
+// ============ МОДАЛКА ЗАМЕТКИ ============
 function editNote(id, onDone) {
     try {
         var top = getTop();
         var item = top[id];
         if (!item) return;
-        var modal = $('<div>').css({
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)',
-            zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
-        });
+        var modal = $('<div>').css({ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' });
         var box = $('<div>').css({ background: '#1c1c22', borderRadius: '12px', padding: '20px', width: '100%', maxWidth: '500px' });
         box.append($('<div>').css({ color: '#fff', fontSize: '16px', marginBottom: '12px' }).text('Заметка к «' + item.title + '»'));
-        var ta = $('<textarea>').css({
-            width: '100%', height: '120px', background: '#0f0f12', color: '#e8e8ec',
-            border: '1px solid #2c2c34', borderRadius: '8px', padding: '10px',
-            fontSize: '14px', fontFamily: 'inherit', outline: 'none', resize: 'vertical', boxSizing: 'border-box'
-        }).val(item.note || '');
+        var ta = $('<textarea>').css({ width: '100%', height: '120px', background: '#0f0f12', color: '#e8e8ec', border: '1px solid #2c2c34', borderRadius: '8px', padding: '10px', fontSize: '14px', fontFamily: 'inherit', outline: 'none', resize: 'vertical', boxSizing: 'border-box' }).val(item.note || '');
         shieldInput(ta);
         var btnRow = $('<div>').css({ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'flex-end' });
         var btnCancel = $('<div class="full-start__button selector"><span>Отмена</span></div>');
@@ -305,62 +516,41 @@ function editNote(id, onDone) {
             if (onDone) onDone();
         });
         setTimeout(function () { ta.focus(); }, 100);
-    } catch (e) { console.error('[MyTop] editNote err:', e); }
+    } catch (e) {}
 }
-
-// ============ МОДАЛКА ЗАМЕТОК ДЛЯ КОЛЛЕКЦИИ ============
 function editCollectionNotes(ids, onDone) {
     try {
-        var modal = $('<div>').css({
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)',
-            zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
-        });
-        var box = $('<div>').css({
-            background: '#1c1c22', borderRadius: '12px', padding: '20px',
-            width: '100%', maxWidth: '520px', maxHeight: '80vh', overflowY: 'auto'
-        });
-        box.append($('<div>').css({ color: '#fff', fontSize: '16px', marginBottom: '12px' }).text('Заметки к частям коллекции'));
-
+        var modal = $('<div>').css({ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' });
+        var box = $('<div>').css({ background: '#1c1c22', borderRadius: '12px', padding: '20px', width: '100%', maxWidth: '520px', maxHeight: '80vh', overflowY: 'auto' });
+        box.append($('<div>').css({ color: '#fff', fontSize: '16px', marginBottom: '12px' }).text('Заметки к частям'));
         var textareas = {};
         var top = getTop();
         ids.forEach(function (id) {
             var item = top[id];
             if (!item) return;
             box.append($('<div>').css({ color: '#ffdd55', fontSize: '13px', marginTop: '10px', marginBottom: '6px' }).text(item.title + ' (' + item.year + ')'));
-            var ta = $('<textarea>').css({
-                width: '100%', height: '60px', background: '#0f0f12', color: '#e8e8ec',
-                border: '1px solid #2c2c34', borderRadius: '8px', padding: '8px',
-                fontSize: '13px', fontFamily: 'inherit', outline: 'none', resize: 'vertical', boxSizing: 'border-box'
-            }).val(item.note || '');
+            var ta = $('<textarea>').css({ width: '100%', height: '60px', background: '#0f0f12', color: '#e8e8ec', border: '1px solid #2c2c34', borderRadius: '8px', padding: '8px', fontSize: '13px', fontFamily: 'inherit', outline: 'none', resize: 'vertical', boxSizing: 'border-box' }).val(item.note || '');
             shieldInput(ta);
             textareas[id] = ta;
             box.append(ta);
         });
-
         var btnRow = $('<div>').css({ display: 'flex', gap: '8px', marginTop: '16px', justifyContent: 'flex-end' });
         var btnCancel = $('<div class="full-start__button selector"><span>Отмена</span></div>');
         var btnSave = $('<div class="full-start__button selector"><span>Сохранить</span></div>');
         btnRow.append(btnCancel).append(btnSave);
         box.append(btnRow);
-
         modal.append(box);
         $('body').append(modal);
         modal.on('keydown keyup keypress', function (e) { e.stopPropagation(); });
-
         onceClick(btnCancel, function () { modal.remove(); });
         onceClick(btnSave, function () {
             var t = getTop();
-            Object.keys(textareas).forEach(function (id) {
-                if (t[id]) t[id].note = textareas[id].val() || '';
-            });
-            saveTop(t);
-            modal.remove(); notify('Заметки сохранены');
+            Object.keys(textareas).forEach(function (id) { if (t[id]) t[id].note = textareas[id].val() || ''; });
+            saveTop(t); modal.remove(); notify('Заметки сохранены');
             if (onDone) onDone();
         });
-    } catch (e) { console.error('[MyTop] editCollectionNotes err:', e); }
+    } catch (e) {}
 }
-
-// ============ МОДАЛКА НОМЕРА ============
 function editPlace(ids, onDone) {
     try {
         var top = getTop();
@@ -369,21 +559,13 @@ function editPlace(ids, onDone) {
         var title = ids.length > 1 ? item.collectionName : item.title;
         var curPlace = '';
         ids.forEach(function (id) { if (top[id] && top[id].place) curPlace = top[id].place; });
-
-        var modal = $('<div>').css({
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)',
-            zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
-        });
+        var modal = $('<div>').css({ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' });
         var box = $('<div>').css({ background: '#1c1c22', borderRadius: '12px', padding: '20px', width: '100%', maxWidth: '400px' });
         box.append($('<div>').css({ color: '#fff', fontSize: '16px', marginBottom: '12px' }).text('Место для «' + title + '»'));
-        var inp = $('<input type="number" min="1">').css({
-            width: '100%', background: '#0f0f12', color: '#e8e8ec',
-            border: '1px solid #2c2c34', borderRadius: '8px', padding: '10px',
-            fontSize: '16px', outline: 'none', boxSizing: 'border-box'
-        }).val(curPlace);
+        var inp = $('<input type="number" min="1">').css({ width: '100%', background: '#0f0f12', color: '#e8e8ec', border: '1px solid #2c2c34', borderRadius: '8px', padding: '10px', fontSize: '16px', outline: 'none', boxSizing: 'border-box' }).val(curPlace);
         shieldInput(inp);
         box.append(inp);
-        box.append($('<div>').css({ color: '#8a8a95', fontSize: '12px', marginTop: '8px' }).text('Пусто — без места. Применяется ко всем частям.'));
+        box.append($('<div>').css({ color: '#8a8a95', fontSize: '12px', marginTop: '8px' }).text('Пусто — без места'));
         var btnRow = $('<div>').css({ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'flex-end' });
         var btnCancel = $('<div class="full-start__button selector"><span>Отмена</span></div>');
         var btnSave = $('<div class="full-start__button selector"><span>Сохранить</span></div>');
@@ -392,40 +574,32 @@ function editPlace(ids, onDone) {
         modal.append(box);
         $('body').append(modal);
         modal.on('keydown keyup keypress', function (e) { e.stopPropagation(); });
-
         onceClick(btnCancel, function () { modal.remove(); });
         onceClick(btnSave, function () {
             var val = parseInt(inp.val(), 10);
             var t = getTop();
             var newPlace = (isNaN(val) || val < 1) ? null : val;
             ids.forEach(function (id) { if (t[id]) t[id].place = newPlace; });
-            saveTop(t);
-            modal.remove();
+            saveTop(t); modal.remove();
             if (onDone) onDone();
         });
         setTimeout(function () { inp.focus(); }, 100);
-    } catch (e) { console.error('[MyTop] editPlace err:', e); }
+    } catch (e) {}
 }
-    function openMovieCard(item) {
-        try {
-            if (!window.Lampa || !Lampa.Activity || !Lampa.Activity.push) return;
-            Lampa.Activity.push({
-                url: '', component: 'full',
-                id: item.id,
-                method: item.isSeries ? 'tv' : 'movie',
-                card: {},
-                source: (Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null
-            });
-        } catch (e) { notify('Не удалось открыть'); }
-    }
 
+function openMovieCard(item) {
+    try {
+        if (!window.Lampa || !Lampa.Activity || !Lampa.Activity.push) return;
+        Lampa.Activity.push({ url: '', component: 'full', id: item.id, method: item.isSeries ? 'tv' : 'movie', card: {}, source: (Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null });
+    } catch (e) { notify('Не удалось открыть'); }
+}
+    // ============ СОРТИРОВКА ============
     function startSort(onDone) {
         try {
             var units = getUnits();
             var placed = units.filter(function (u) { return u.place; }).sort(function (a, b) { return a.place - b.place; });
             var unplaced = units.filter(function (u) { return !u.place; }).sort(function (a, b) { return (a.addedAt || 0) - (b.addedAt || 0); });
             if (!unplaced.length) { notify('Все уже расставлены'); if (onDone) onDone(); return; }
-
             var movieIdx = 0;
             function nextMovie() {
                 if (movieIdx >= unplaced.length) { finish(); return; }
@@ -451,9 +625,8 @@ function editPlace(ids, onDone) {
                 if (onDone) onDone();
             }
             nextMovie();
-        } catch (e) { console.error('[MyTop] sort err:', e); notify('Ошибка сортировки'); }
+        } catch (e) {}
     }
-
     function showCompareDialog(a, b, onPick, onCancel) {
         try {
             var modal;
@@ -461,19 +634,10 @@ function editPlace(ids, onDone) {
             function unitTitle(u) { return u.isCollection ? u.title + ' (' + u.count + ')' : u.title; }
             function row(unit, pick) {
                 var src = posterUrl(unit.poster, 'w300');
-                var wrap = $('<div class="full-start__button selector">').css({
-                    flex: 1, display: 'flex', flexDirection: 'column',
-                    alignItems: 'center', padding: '14px', cursor: 'pointer'
-                });
+                var wrap = $('<div class="full-start__button selector">').css({ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '14px', cursor: 'pointer' });
                 if (src) {
-                    var img = $('<img>').attr('src', src).css({
-                        width: '120px', height: '180px', objectFit: 'cover',
-                        borderRadius: '6px', marginBottom: '10px', background: '#222'
-                    });
-                    img.on('error', function () {
-                        var direct = 'https://image.tmdb.org/t/p/w300/' + String(unit.poster).replace(/^\/+/, '');
-                        if (img.attr('src') !== direct) img.attr('src', direct); else img.hide();
-                    });
+                    var img = $('<img>').attr('src', src).css({ width: '120px', height: '180px', objectFit: 'cover', borderRadius: '6px', marginBottom: '10px', background: '#222' });
+                    img.on('error', function () { var d = 'https://image.tmdb.org/t/p/w300/' + String(unit.poster).replace(/^\/+/, ''); if (img.attr('src') !== d) img.attr('src', d); else img.hide(); });
                     wrap.append(img);
                 }
                 wrap.append($('<div>').css({ color: '#fff', fontSize: '14px', textAlign: 'center' }).text(unitTitle(unit)));
@@ -481,11 +645,7 @@ function editPlace(ids, onDone) {
                 onceClick(wrap, function () { if (canceled) return; modal.remove(); onPick(pick); });
                 return wrap;
             }
-            modal = $('<div>').css({
-                position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)',
-                zIndex: 100000, display: 'flex', flexDirection: 'column',
-                alignItems: 'center', justifyContent: 'center', padding: '20px'
-            });
+            modal = $('<div>').css({ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)', zIndex: 100000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px' });
             modal.append($('<div>').css({ color: '#8a8a95', fontSize: '14px', marginBottom: '20px' }).text('Что лучше?'));
             var rowWrap = $('<div>').css({ display: 'flex', gap: '16px', width: '100%', maxWidth: '600px' });
             rowWrap.append(row(a, 'movie')).append(row(b, 'placed'));
@@ -494,9 +654,10 @@ function editPlace(ids, onDone) {
             onceClick(cancel, function () { if (canceled) return; canceled = true; modal.remove(); onCancel(); });
             modal.append(cancel);
             $('body').append(modal);
-        } catch (e) { console.error('[MyTop] compare err:', e); onCancel(); }
+        } catch (e) { onCancel(); }
     }
 
+    // ============ КОМПОНЕНТ ============
     function MyTopComponent() {
         var html = $('<div class="my-top-page" style="height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;"></div>');
 
@@ -507,22 +668,43 @@ function editPlace(ids, onDone) {
                 var units = getSortedUnits();
 
                 var buttons = $('<div style="display:flex;gap:8px;padding:20px 20px 12px;flex-wrap:wrap;"></div>');
-                var btnSort = $('<div class="full-start__button selector" style="flex:1;min-width:120px;"><span>Сортировать</span></div>');
+
+                var btnSort = $('<div class="full-start__button selector" style="flex:1;min-width:110px;"><span>Сортировать</span></div>');
                 onceClick(btnSort, function () { startSort(buildContent); });
                 buttons.append(btnSort);
-                var btnCopy = $('<div class="full-start__button selector" style="flex:1;min-width:120px;"><span>Копировать</span></div>');
+
+                var btnCopy = $('<div class="full-start__button selector" style="flex:1;min-width:110px;"><span>Копировать</span></div>');
                 onceClick(btnCopy, function () {
                     copyToClipboard(buildTopText(true),
                         function () { notify('Топ скопирован'); },
                         function () { notify('Не удалось скопировать'); });
                 });
                 buttons.append(btnCopy);
-                var btnEnrich = $('<div class="full-start__button selector" style="flex:1;min-width:120px;"><span>Обновить данные</span></div>');
+
+                var btnEnrich = $('<div class="full-start__button selector" style="flex:1;min-width:110px;"><span>Обновить данные</span></div>');
                 onceClick(btnEnrich, function () { enrichTop(buildContent); });
                 buttons.append(btnEnrich);
-                html.append(buttons);
 
+                var btnRec = $('<div class="full-start__button selector" style="flex:1;min-width:110px;"><span>Рекомендации</span></div>');
+                onceClick(btnRec, function () {
+                    if (!getLLMSettings().apiUrl) {
+                        notify('Сначала укажи API в настройках');
+                        openLLMSettings(buildContent);
+                        return;
+                    }
+                    requestRecommendations(function (recs) {
+                        showRecommendations(recs, function (card) { addToTop(card); });
+                    }, function (e) { notify('Ошибка: ' + e); });
+                });
+                buttons.append(btnRec);
+
+                var btnSettings = $('<div class="full-start__button selector" style="flex:1;min-width:110px;"><span>Настройки ИИ</span></div>');
+                onceClick(btnSettings, function () { openLLMSettings(buildContent); });
+                buttons.append(btnSettings);
+
+                html.append(buttons);
                 html.append('<div style="margin:0 20px 20px;padding:12px;background:rgba(0,0,0,0.3);border-radius:8px;color:#8a8a95;font-size:12px;">Элементов: <b>' + units.length + '</b></div>');
+
                 if (!units.length) {
                     html.append('<div style="padding:40px;text-align:center;color:#8a8a95;">Список пуст</div>');
                     return;
@@ -533,84 +715,45 @@ function editPlace(ids, onDone) {
                     var placeText = u.place ? '#' + u.place : '—';
                     var src = posterUrl(u.poster, 'w200');
                     var row = $('<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06);"></div>');
-
-                    var placeBtn = $('<div>').css({
-                        fontSize: '22px', fontWeight: '700', color: '#ffdd55',
-                        minWidth: '44px', textAlign: 'center', cursor: 'pointer', userSelect: 'none'
-                    }).text(placeText);
+                    var placeBtn = $('<div>').css({ fontSize: '22px', fontWeight: '700', color: '#ffdd55', minWidth: '44px', textAlign: 'center', cursor: 'pointer', userSelect: 'none' }).text(placeText);
                     onceClick(placeBtn, function () { editPlace(u.ids, buildContent); });
                     row.append(placeBtn);
-
-                    var posterWrap = $('<div>').css({
-                        width: '54px', height: '80px', borderRadius: '6px',
-                        background: 'rgba(255,255,255,0.05)', flexShrink: 0,
-                        cursor: 'pointer', overflow: 'hidden',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center'
-                    });
+                    var posterWrap = $('<div>').css({ width: '54px', height: '80px', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', flexShrink: 0, cursor: 'pointer', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' });
                     if (src) {
                         var img = $('<img>').attr('src', src).css({ width: '100%', height: '100%', objectFit: 'cover', display: 'block' });
-                        img.on('error', function () {
-                            var direct = 'https://image.tmdb.org/t/p/w200/' + String(u.poster).replace(/^\/+/, '');
-                            if (img.attr('src') !== direct) img.attr('src', direct); else img.remove();
-                        });
+                        img.on('error', function () { var d = 'https://image.tmdb.org/t/p/w200/' + String(u.poster).replace(/^\/+/, ''); if (img.attr('src') !== d) img.attr('src', d); else img.remove(); });
                         posterWrap.append(img);
                     }
                     onceClick(posterWrap, function () { openMovieCard(top[u.ids[0]]); });
                     row.append(posterWrap);
-
                     var info = $('<div>').css({ flex: 1, minWidth: 0, cursor: 'pointer' });
-
-                    // Мелкий жёлтый текст "КОЛЛЕКЦИЯ × N" НАД названием
-                    if (u.isCollection) {
-                        info.append($('<div>').css({
-                            color: '#ffdd55', fontSize: '10px', fontWeight: '700',
-                            letterSpacing: '0.5px', marginBottom: '2px'
-                        }).text('КОЛЛЕКЦИЯ × ' + u.count));
-                    }
-
-                    var titleDiv = $('<div>').css({
-                        fontSize: '16px', color: '#fff',
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
-                    }).text(u.title);
-                    if (!u.isCollection && top[u.ids[0]].isSeries) {
-                        titleDiv.append(' ').append($('<span>').css({ color: '#ffdd55', fontSize: '11px' }).text('СЕРИАЛ'));
-                    }
+                    if (u.isCollection) info.append($('<div>').css({ color: '#ffdd55', fontSize: '10px', fontWeight: '700', letterSpacing: '0.5px', marginBottom: '2px' }).text('КОЛЛЕКЦИЯ × ' + u.count));
+                    var titleDiv = $('<div>').css({ fontSize: '16px', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }).text(u.title);
+                    if (!u.isCollection && top[u.ids[0]].isSeries) titleDiv.append(' ').append($('<span>').css({ color: '#ffdd55', fontSize: '11px' }).text('СЕРИАЛ'));
                     info.append(titleDiv);
-
                     if (u.isCollection) {
                         var parts = u.ids.map(function (id) { return top[id].title + ' (' + top[id].year + ')'; }).join(' · ');
-                        info.append($('<div>').css({
-                            fontSize: '12px', color: '#8a8a95', marginTop: '4px',
-                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
-                        }).text(parts));
+                        info.append($('<div>').css({ fontSize: '12px', color: '#8a8a95', marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }).text(parts));
                     } else {
                         info.append($('<div>').css({ fontSize: '13px', color: '#8a8a95', marginTop: '4px' }).text(top[u.ids[0]].year || '—'));
                     }
-                    if (u.note) {
-                        info.append($('<div>').css({
-                            fontSize: '12px', color: '#8a8a95', marginTop: '4px',
-                            fontStyle: 'italic', overflow: 'hidden',
-                            textOverflow: 'ellipsis', whiteSpace: 'nowrap'
-                        }).text(u.note));
-                    }
+                    if (u.note) info.append($('<div>').css({ fontSize: '12px', color: '#8a8a95', marginTop: '4px', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }).text(u.note));
                     onceClick(info, function () { openMovieCard(top[u.ids[0]]); });
                     row.append(info);
-
                     var noteBtn = $('<div class="full-start__button selector" style="padding:8px 12px;"><span style="font-size:12px;">Заметка</span></div>');
                     onceClick(noteBtn, function () {
                         if (u.isCollection) editCollectionNotes(u.ids, buildContent);
                         else editNote(u.ids[0], buildContent);
                     });
                     row.append(noteBtn);
-
                     list.append(row);
                 });
                 html.append(list);
             } catch (e) {
-                console.error('[MyTop] buildContent err:', e);
                 html.append('<div style="padding:40px;text-align:center;color:#ff6666;">Ошибка: ' + e.message + '</div>');
             }
         }
+
         this.create = function () { importFavorites(true); buildContent(); return html; };
         this.start = function () {};
         this.render = function () { return html; };
@@ -627,7 +770,8 @@ function editPlace(ids, onDone) {
     }
 
     var STAR_SVG_CARD = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;"><path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
-   var STAR_SVG_MENU = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style="width:2em;height:2em;display:block;"><path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
+    var STAR_SVG_MENU = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%;height:100%;display:block;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+
     function addButtonToFull(e) {
         if (e.type !== 'complite') return;
         var movie = e.data && e.data.movie ? e.data.movie : null;
@@ -656,6 +800,7 @@ function editPlace(ids, onDone) {
         };
         setTimeout(tryAdd, 1500);
     }
+
     function startPlugin() {
         if (window[PLUGIN_NAME]) return;
         window[PLUGIN_NAME] = true;
@@ -663,8 +808,9 @@ function editPlace(ids, onDone) {
             registerComponent();
             Lampa.Listener.follow('full', addButtonToFull);
             addMenuItem();
-        } catch (e) { console.error('[MyTop] start err:', e); }
+        } catch (e) {}
     }
+
     if (window.appready) startPlugin();
     else Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') startPlugin(); });
 })();

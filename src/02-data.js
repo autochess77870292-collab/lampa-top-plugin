@@ -27,6 +27,13 @@ function addToTop(card) {
     if (top[info.id]) { notify('Уже в топе'); return; }
     top[info.id] = info;
     saveTop(top);
+
+    try {
+        if (window.Lampa && Lampa.Favorite && typeof Lampa.Favorite.add === 'function') {
+            Lampa.Favorite.add('viewed', card);
+        }
+    } catch (e) {}
+
     notify('"' + info.title + '" → в топе (' + Object.keys(top).length + ')');
 }
 

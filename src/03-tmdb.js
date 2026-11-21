@@ -1,5 +1,5 @@
 (function () {
-    var ver = 'V9';
+    var ver = 'V11';
     function showVer() {
         setTimeout(function () { notify(ver); }, 600);
     }

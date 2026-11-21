@@ -196,7 +196,6 @@ function syncWithFavorites(silent) {
     } catch (e) { console.error('[MyTop] sync err:', e); return { added: 0, removed: 0 }; }
 }
 function importFavorites(silent) { return syncWithFavorites(silent); }
-
     // ===== src/03-tmdb.js =====
 (function () {
     var ver = 'V6';

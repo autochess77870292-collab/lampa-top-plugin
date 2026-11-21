@@ -166,51 +166,92 @@ function fetchTMDB(id, onSuccess, onFail) {
 }
 
 function searchTMDBItem(item, callback) {
-    var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
-    if (!tmdb || typeof tmdb.search !== 'function') { callback(null); return; }
     var types = item.isSeries ? ['tv', 'movie'] : ['movie', 'tv'];
-    function tryType(ti) {
-        if (ti >= types.length) { callback(null); return; }
-        var type = types[ti];
-        var params = { query: item.title, type: type, language: 'ru-RU' };
-        if (item.year) params.year = item.year;
-        try {
-            tmdb.search(params, function (res) {
+
+    function pickBest(results) {
+        if (!results || !results.length) return null;
+        var best = results[0];
+        if (item.year) {
+            for (var j = 0; j < results.length; j++) {
+                var dt = results[j].release_date || results[j].first_air_date || '';
+                if (parseInt(dt.substring(0, 4), 10) === item.year) {
+                    best = results[j];
+                    break;
+                }
+            }
+        }
+        return best;
+    }
+
+    function loadFull(best, type) {
+        var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
+        if (tmdb && typeof tmdb.full === 'function' && best && best.id) {
+            try {
+                tmdb.full({ id: best.id, method: type, card: {}, language: 'ru-RU' }, function (full) {
+                    callback((full && (full.movie || full)) || best);
+                }, function () {
+                    callback(best);
+                });
+                return;
+            } catch (e) {}
+        }
+        callback(best);
+    }
+
+    if (window.Lampa && Lampa.Api && typeof Lampa.Api.search === 'function') {
+        Lampa.Api.search({ query: item.title }, function (res) {
+            var all = [];
+            if (res) {
+                if (Array.isArray(res)) {
+                    res.forEach(function (group) {
+                        if (group && Array.isArray(group.results)) all = all.concat(group.results);
+                    });
+                } else if (Array.isArray(res.results)) {
+                    all = res.results;
+                }
+            }
+            var filtered = all.filter(function (r) {
+                var isTV = !!(r.name || r.first_air_date || r.media_type === 'tv');
+                return item.isSeries ? isTV : !isTV;
+            });
+            var best = pickBest(filtered.length ? filtered : all);
+            if (best) {
+                var detectedType = (best.name || best.first_air_date || best.media_type === 'tv') ? 'tv' : 'movie';
+                loadFull(best, detectedType);
+            } else {
+                callback(null);
+            }
+        }, function () {
+            callback(null);
+        });
+        return;
+    }
+
+    var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
+    if (tmdb && typeof tmdb.list === 'function') {
+        function tryType(ti) {
+            if (ti >= types.length) { callback(null); return; }
+            var type = types[ti];
+            var url = 'search/' + type + '?query=' + encodeURIComponent(item.title) + '&language=ru-RU' + (item.year ? '&year=' + item.year : '');
+            tmdb.list({ url: url }, function (res) {
                 var results = (res && res.results) ? res.results : [];
                 if (!results.length) { tryType(ti + 1); return; }
-                var best = results[0];
-                if (item.year) {
-                    for (var j = 0; j < results.length; j++) {
-                        var dt = results[j].release_date || results[j].first_air_date || '';
-                        if (parseInt(dt.substring(0, 4), 10) === item.year) { best = results[j]; break; }
-                    }
-                }
-                if (typeof tmdb.full === 'function' && best && best.id) {
-                    try {
-                        tmdb.full({ id: best.id, method: type, card: {}, language: 'ru-RU' }, function (full) {
-                            callback((full && (full.movie || full)) || best);
-                        }, function () { callback(best); });
-                    } catch (e) { callback(best); }
-                } else callback(best);
+                loadFull(pickBest(results), type);
             }, function () { tryType(ti + 1); });
-        } catch (e) { tryType(ti + 1); }
+        }
+        tryType(0);
+        return;
     }
-    tryType(0);
+
+    callback(null);
 }
 
 function searchTMDBForRecommendation(rec, done) {
-    var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
-    if (!tmdb || typeof tmdb.search !== 'function') { done(null); return; }
-    try {
-        tmdb.search({ query: rec.title, type: 'movie', language: 'ru-RU' }, function (res) {
-            var m = null;
-            try { if (res && res.results && res.results.length) m = res.results[0]; } catch (e) {}
-            if (!m) { done(null); return; }
-            if (typeof tmdb.full === 'function') {
-                tmdb.full({ id: m.id, method: 'movie', card: {}, language: 'ru-RU' }, function (full) { done((full && full.movie) || m); }, function () { done(m); });
-            } else done(m);
-        }, function () { done(null); });
-    } catch (e) { done(null); }
+    searchTMDBItem({
+        title: rec.title,
+        year: rec.year ? parseInt(rec.year, 10) : null,
+        isSeries: false
+    }, done);
 }
 
 function enrichTop(onDone) {
@@ -254,6 +295,7 @@ function enrichTop(onDone) {
     }
     next();
 }
+
     // ===== src/04-units.js =====
 function getUnits() {
     var top = getTop();

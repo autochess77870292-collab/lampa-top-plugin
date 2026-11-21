@@ -934,26 +934,26 @@ function MyTopComponent() {
                     img.on('error', function () { var d = 'https://tmdb.org' + String(u.poster).replace(/^\/+/, ''); if (img.attr('src') !== d) img.attr('src', d); else img.remove(); });
                     posterWrap.append(img);
                 }
-                onceClick(posterWrap, function () { openMovieCard(top[u.ids[0]]); });
+                onceClick(posterWrap, function () { openMovieCard(top[u.ids]); });
                 row.append(posterWrap);
                 var info = $('<div>').css({ flex: 1, minWidth: 0, cursor: 'pointer' });
                 if (u.isCollection) info.append($('<div>').css({ color: '#ffdd55', fontSize: '10px', fontWeight: '700', letterSpacing: '0.5px', marginBottom: '2px' }).text('КОЛЛЕКЦИЯ × ' + u.count));
                 var titleDiv = $('<div>').css({ fontSize: '16px', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }).text(u.title);
-                if (!u.isCollection && top[u.ids[0]].isSeries) titleDiv.append(' ').append($('<span>').css({ color: '#ffdd55', fontSize: '11px' }).text('СЕРИАЛ'));
+                if (!u.isCollection && top[u.ids].isSeries) titleDiv.append(' ').append($('<span>').css({ color: '#ffdd55', fontSize: '11px' }).text('СЕРИАЛ'));
                 info.append(titleDiv);
                 if (u.isCollection) {
                     var parts = u.ids.map(function (id) { return top[id].title + ' (' + top[id].year + ')'; }).join(' · ');
                     info.append($('<div>').css({ fontSize: '12px', color: '#8a8a95', marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }).text(parts));
                 } else {
-                    info.append($('<div>').css({ fontSize: '13px', color: '#8a8a95', marginTop: '4px' }).text(top[u.ids[0]].year || '—'));
+                    info.append($('<div>').css({ fontSize: '13px', color: '#8a8a95', marginTop: '4px' }).text(top[u.ids].year || '—'));
                 }
                 if (u.note) info.append($('<div>').css({ fontSize: '12px', color: '#8a8a95', marginTop: '4px', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }).text(u.note));
-                onceClick(info, function () { openMovieCard(top[u.ids[0]]); });
+                onceClick(info, function () { openMovieCard(top[u.ids]); });
                 row.append(info);
                 var noteBtn = $('<div class="full-start__button selector" style="padding:8px 12px;"><span style="font-size:12px;">Заметка</span></div>');
                 onceClick(noteBtn, function () {
                     if (u.isCollection) editCollectionNotes(u.ids, buildContent);
-                    else editNote(u.ids[0], buildContent);
+                    else editNote(u.ids, buildContent);
                 });
                 row.append(noteBtn);
                 list.append(row);
@@ -1017,7 +1017,6 @@ function startPlugin() {
         registerComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
-        notify('V1');
     } catch (e) {}
 }
 if (window.appready) startPlugin();

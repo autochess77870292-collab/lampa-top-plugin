@@ -893,7 +893,7 @@ function MyTopComponent() {
                 var posterWrap = $('<div>').css({ width: '54px', height: '80px', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', flexShrink: 0, cursor: 'pointer', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' });
                 if (src) {
                     var img = $('<img>').attr('src', src).css({ width: '100%', height: '100%', objectFit: 'cover', display: 'block' });
-                    img.on('error', function () { var d = 'https://image.tmdb.org/t/p/w200/' + String(u.poster).replace(/^\/+/, ''); if (img.attr('src') !== d) img.attr('src', d); else img.remove(); });
+                    img.on('error', function () { var d = 'https://tmdb.org' + String(u.poster).replace(/^\/+/, ''); if (img.attr('src') !== d) img.attr('src', d); else img.remove(); });
                     posterWrap.append(img);
                 }
                 onceClick(posterWrap, function () { openMovieCard(top[u.ids[0]]); });
@@ -941,8 +941,8 @@ function openTopPage() {
     catch (e) { notify('Ошибка открытия: ' + e.message); }
 }
 
-var STAR_SVG_CARD = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;"><path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
-var STAR_SVG_MENU = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%;height:100%;display:block;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+var STAR_SVG_CARD = '<svg xmlns="http://w3.org" viewBox="0 0 24 24" style="width:2em;height:2em;min-width:2em;min-height:2em;display:block;flex:0 0 auto;"><path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
+var STAR_SVG_MENU = '<svg xmlns="http://w3.org" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%;height:100%;display:block;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
 
 function addButtonToFull(e) {
     if (e.type !== 'complite') return;
@@ -979,8 +979,10 @@ function startPlugin() {
         registerComponent();
         Lampa.Listener.follow('full', addButtonToFull);
         addMenuItem();
+        notify('V1');
     } catch (e) {}
 }
 if (window.appready) startPlugin();
 else Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') startPlugin(); });
+
 })();

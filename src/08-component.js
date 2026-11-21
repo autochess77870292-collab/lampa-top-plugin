@@ -5,59 +5,27 @@ function domEl(tag, cls, css) {
     return e;
 }
 
-function buildSvgIcon(type, size) {
-    var ns = 'http://w3.org';
-    var svg = document.createElementNS(ns, 'svg');
+function makeIcon(type, size) {
     var s = size || '18px';
-    svg.setAttribute('viewBox', '0 0 24 24');
-    svg.setAttribute('width', s);
-    svg.setAttribute('height', s);
-
+    var box = domEl('span', '', { width: s, height: s, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 });
+    var inner = '';
     if (type === 'star_fill') {
-        svg.setAttribute('style', 'display:block;width:2em;height:2em;min-width:2em;min-height:2em;flex:0 0 auto;');
-        var p = document.createElementNS(ns, 'path');
-        p.setAttribute('fill', 'currentColor');
-        p.setAttribute('d', 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z');
-        svg.appendChild(p);
-        return $(svg);
-    }
-
-    svg.setAttribute('style', 'display:block;width:' + s + ';height:' + s + ';');
-    svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', 'currentColor');
-    svg.setAttribute('stroke-width', '2');
-    svg.setAttribute('stroke-linecap', 'round');
-    svg.setAttribute('stroke-linejoin', 'round');
-
-    function addPath(d) {
-        var el = document.createElementNS(ns, 'path');
-        el.setAttribute('d', d);
-        svg.appendChild(el);
-    }
-
-    if (type === 'star_menu') {
-        var poly = document.createElementNS(ns, 'polygon');
-        poly.setAttribute('points', '12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2');
-        svg.appendChild(poly);
+        inner = '<path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>';
+    } else if (type === 'star_menu') {
+        inner = '<polygon fill="none" stroke="currentColor" stroke-width="2" points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>';
     } else if (type === 'sort') {
-        addPath('M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3');
+        inner = '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3"/>';
     } else if (type === 'copy') {
-        var r = document.createElementNS(ns, 'rect');
-        r.setAttribute('x', '9'); r.setAttribute('y', '9'); r.setAttribute('width', '13'); r.setAttribute('height', '13'); r.setAttribute('rx', '2');
-        svg.appendChild(r);
-        addPath('M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1');
+        inner = '<rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>';
     } else if (type === 'paste') {
-        addPath('M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2');
-        var r2 = document.createElementNS(ns, 'rect');
-        r2.setAttribute('x', '8'); r2.setAttribute('y', '2'); r2.setAttribute('width', '8'); r2.setAttribute('height', '4'); r2.setAttribute('rx', '1');
-        svg.appendChild(r2);
-        addPath('M12 11v6M9 14l3 3 3-3');
+        inner = '<path fill="none" stroke="currentColor" stroke-width="2" d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" d="M12 11v6M9 14l3 3 3-3"/>';
     } else if (type === 'refresh') {
-        addPath('M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16M16 16h5v5');
+        inner = '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16M16 16h5v5"/>';
     } else if (type === 'trash') {
-        addPath('M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2');
+        inner = '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>';
     }
-    return $(svg);
+    box[0].innerHTML = '<svg viewBox="0 0 24 24" width="' + s + '" height="' + s + '" style="display:block;width:100%;height:100%;">' + inner + '</svg>';
+    return box;
 }
 
 function MyTopComponent() {
@@ -80,7 +48,7 @@ function MyTopComponent() {
             display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px'
         });
         if (active) btn.css({ background: '#d9383a', color: '#fff' });
-        btn.append(buildSvgIcon(type, '18px'));
+        btn.append(makeIcon(type, '18px'));
         return btn;
     }
 
@@ -159,7 +127,7 @@ function MyTopComponent() {
             }
             var list = domEl('div', '', { padding: '0 16px 120px' });
             units.forEach(function (u) {
-                var firstId = u.ids;
+                var firstId = u.ids[0];
                 var firstItem = top[firstId] || {};
                 var placeText = u.place ? '#' + u.place : '—';
                 var src = posterUrl(u.poster, 'w200');
@@ -240,7 +208,7 @@ function addButtonToFull(e) {
     if (!movie) return;
     setTimeout(function () {
         if ($('.my-top-btn-card').length > 0) return;
-        var btn = domEl('div', 'full-start__button selector view--custom my-top-btn-card', { display: 'flex', alignItems: 'center', justifyContent: 'center' }).append(buildSvgIcon('star_fill', '2em'));
+        var btn = domEl('div', 'full-start__button selector view--custom my-top-btn-card', { display: 'flex', alignItems: 'center', justifyContent: 'center' }).append(makeIcon('star_fill', '22px'));
         onceClick(btn, function () { addToTop(movie); });
         var c = $('.full-start__buttons');
         if (c.length) c.append(btn);
@@ -256,7 +224,7 @@ function addMenuItem() {
             var first = lists.first();
             if (first.find('.my-top-menu-item').length > 0) return;
             var item = domEl('li', 'menu__item selector my-top-menu-item');
-            item.append(domEl('div', 'menu__ico').append(buildSvgIcon('star_menu', '100%')));
+            item.append(domEl('div', 'menu__ico').append(makeIcon('star_menu', '22px')));
             item.append(domEl('div', 'menu__text').text('Мой топ'));
             onceClick(item, openTopPage);
             first.append(item);

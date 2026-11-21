@@ -273,6 +273,182 @@ function buildTopText(withNotes) {
     return lines.join('\n');
 }
 
+// === НОВОЕ: импорт — парсинг строки/текста ===
+function parseTopLine(raw) {
+    var isSeries = false;
+    if (/\[сериал\]\s*$/i.test(raw)) {
+        isSeries = true;
+        raw = raw.replace(/\s*\[сериал\]\s*$/i, '').trim();
+    }
+    var year = null;
+    var title = raw;
+    var ym = raw.match(/\((\d{4})\)\s*$/);
+    if (ym) {
+        year = parseInt(ym[1], 10);
+        title = raw.replace(/\s*\(\d{4}\)\s*$/, '').trim();
+    }
+    if (!title) return null;
+    return { title: title, year: year, isSeries: isSeries, note: '' };
+}
+
+function parseTopText(text) {
+    var lines = String(text).split('\n');
+    var items = [];
+    var currentCol = null;
+    var lastItem = null;
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (!line || !line.trim()) continue;
+        var nm = line.match(/^\s+Заметка:\s*(.*)$/);
+        if (nm) {
+            if (lastItem) lastItem.note = (nm[1] || '').trim();
+            continue;
+        }
+        var cm = line.match(/^\s*-\s+(.+)$/);
+        if (cm) {
+            if (currentCol) {
+                var child = parseTopLine(cm[1].trim());
+                if (child) { currentCol.children.push(child); lastItem = child; }
+            }
+            continue;
+        }
+        var mm = line.match(/^\s*\d+\.\s+(.+)$/);
+        if (mm) {
+            var raw = mm[1].trim();
+            if (/\(коллекция\)\s*$/i.test(raw)) {
+                var colTitle = raw.replace(/\s*\(коллекция\)\s*$/i, '').trim();
+                currentCol = { title: colTitle, children: [] };
+                items.push({ type: 'collection', data: currentCol });
+                lastItem = null;
+            } else {
+                var single = parseTopLine(raw);
+                if (single) {
+                    items.push({ type: 'single', data: single });
+                    lastItem = single;
+                    currentCol = null;
+                }
+            }
+        }
+    }
+    return items;
+}
+// === НОВОЕ: импорт — поиск в TMDB и запуск импорта ===
+function searchTMDBItem(item, callback) {
+    var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
+    if (!tmdb || typeof tmdb.search !== 'function') { callback(null); return; }
+    var types = item.isSeries ? ['tv', 'movie'] : ['movie', 'tv'];
+    function tryType(ti) {
+        if (ti >= types.length) { callback(null); return; }
+        var type = types[ti];
+        try {
+            tmdb.search({ query: item.title, type: type }, function (res) {
+                var results = (res && res.results) ? res.results : [];
+                if (!results.length) { tryType(ti + 1); return; }
+                var best = results[0];
+                if (item.year) {
+                    for (var j = 0; j < results.length; j++) {
+                        var dt = results[j].release_date || results[j].first_air_date || '';
+                        if (parseInt(dt.substring(0, 4), 10) === item.year) { best = results[j]; break; }
+                    }
+                }
+                if (typeof tmdb.full === 'function' && best && best.id) {
+                    try {
+                        tmdb.full({ id: best.id, method: type, card: {} }, function (full) {
+                            callback((full && (full.movie || full)) || best);
+                        }, function () { callback(best); });
+                    } catch (e) { callback(best); }
+                } else callback(best);
+            }, function () { tryType(ti + 1); });
+        } catch (e) { tryType(ti + 1); }
+    }
+    tryType(0);
+}
+
+function importFromList(text, onDone) {
+    var items = parseTopText(text);
+    if (!items.length) { notify('Список пуст или не распознан'); if (onDone) onDone(); return; }
+
+    var queue = [];
+    items.forEach(function (it) {
+        if (it.type === 'single') queue.push(it.data);
+        else if (it.type === 'collection' && it.data.children.length) {
+            it.data.children.forEach(function (c) { queue.push(c); });
+        }
+    });
+    if (!queue.length) { notify('Нет фильмов для импорта'); if (onDone) onDone(); return; }
+
+    var top = getTop();
+    var wasEmpty = Object.keys(top).length === 0;
+    var baseTime = Date.now();
+    var idx = 0, added = 0, skipped = 0, notFound = 0;
+    var total = queue.length;
+    notify('Импорт: 0/' + total);
+
+    function next() {
+        if (idx >= total) {
+            if (wasEmpty) {
+                var units = getUnits();
+                units.sort(function (a, b) { return (a.addedAt || 0) - (b.addedAt || 0); });
+                units.forEach(function (u, i) {
+                    u.ids.forEach(function (id) { if (top[id]) top[id].place = i + 1; });
+                });
+            }
+            saveTop(top);
+            var msg = 'Импорт: +' + added;
+            if (skipped) msg += ', дубли: ' + skipped;
+            if (notFound) msg += ', не найдено: ' + notFound;
+            notify(msg);
+            if (onDone) onDone();
+            return;
+        }
+        var item = queue[idx++];
+        if (idx % 3 === 0 || idx === total) notify('Импорт: ' + idx + '/' + total);
+        searchTMDBItem(item, function (card) {
+            if (!card || !card.id) { notFound++; setTimeout(next, 200); return; }
+            var info = extractCardInfo(card);
+            if (!info || !info.id) { notFound++; setTimeout(next, 200); return; }
+            if (top[info.id]) {
+                if (item.note && !top[info.id].note) top[info.id].note = item.note;
+                skipped++; setTimeout(next, 200); return;
+            }
+            info.place = null;
+            info.note = item.note || '';
+            info.source = 'import';
+            info.addedAt = baseTime + idx;
+            top[info.id] = info;
+            added++;
+            setTimeout(next, 200);
+        });
+    }
+    next();
+}
+
+function openImportDialog(onDone) {
+    var modal = $('<div>').css({ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', zIndex: 100001, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' });
+    var box = $('<div>').css({ background: '#1c1c22', borderRadius: '12px', padding: '20px', width: '100%', maxWidth: '620px', maxHeight: '88vh', display: 'flex', flexDirection: 'column' });
+    box.append($('<div>').css({ color: '#fff', fontSize: '18px', marginBottom: '8px' }).text('Вставить список'));
+    box.append($('<div>').css({ color: '#8a8a95', fontSize: '12px', marginBottom: '10px', lineHeight: '1.4' }).text('Формат как у «Копировать». Коллекции: «Название (коллекция)» + вложенные «- Фильм (год)». Заметки: «Заметка: ...». Сериалы: «[сериал]».'));
+    var ta = $('<textarea>').attr('placeholder', 'Мой топ (N):\n\n1. Фильм (2020)\n   Заметка: ...\n2. Коллекция (коллекция)\n   - Фильм 1 (2019)\n   - Фильм 2 (2021)').css({ flex: 1, minHeight: '320px', background: '#0f0f12', color: '#e8e8ec', border: '1px solid #2c2c34', borderRadius: '8px', padding: '10px', fontSize: '13px', fontFamily: 'monospace', outline: 'none', resize: 'vertical', boxSizing: 'border-box' });
+    shieldInput(ta);
+    box.append(ta);
+    var row = $('<div>').css({ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'flex-end' });
+    var bCancel = $('<div class="full-start__button selector"><span>Отмена</span></div>');
+    var bOk = $('<div class="full-start__button selector"><span>Импортировать</span></div>');
+    row.append(bCancel).append(bOk);
+    box.append(row);
+    modal.append(box);
+    $('body').append(modal);
+    modal.on('keydown keyup keypress', function (e) { e.stopPropagation(); });
+    onceClick(bCancel, function () { modal.remove(); });
+    onceClick(bOk, function () {
+        var v = ta.val();
+        if (!v || !v.trim()) { notify('Пусто'); return; }
+        modal.remove();
+        importFromList(v, onDone);
+    });
+    setTimeout(function () { try { ta.focus(); } catch (e) {} }, 100);
+}
+
 // ============ LLM ============
 function buildLLMPrompt() {
     var text = buildTopText(true);
@@ -325,7 +501,6 @@ function requestRecommendations(onOk, onErr) {
         } catch (e) { onErr('Парсинг: ' + e.message); }
     }, onErr);
 }
-
 // ============ НАСТРОЙКИ LLM ============
 function openLLMSettings(onDone) {
     var s = getLLMSettings();
@@ -419,6 +594,7 @@ function searchTMDBForRecommendation(rec, done) {
         }, function () { done(null); });
     } catch (e) { done(null); }
 }
+
 // ============ МОДАЛКИ ============
 function editNote(id, onDone) {
     try {
@@ -636,6 +812,11 @@ function showCompareDialog(a, b, onPick, onCancel) {
                         function () { notify('Не удалось скопировать'); });
                 });
                 buttons.append(btnCopy);
+
+                // === НОВОЕ: кнопка Вставить ===
+                var btnImport = $('<div class="full-start__button selector" style="flex:1;min-width:110px;"><span>Вставить</span></div>');
+                onceClick(btnImport, function () { openImportDialog(buildContent); });
+                buttons.append(btnImport);
 
                 var btnEnrich = $('<div class="full-start__button selector" style="flex:1;min-width:110px;"><span>Обновить</span></div>');
                 onceClick(btnEnrich, function () { enrichTop(buildContent); });

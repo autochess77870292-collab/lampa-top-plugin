@@ -852,15 +852,13 @@ function domEl(tag, cls, css) {
 function buildSvgIcon(type, size) {
     var ns = 'http://w3.org';
     var svg = document.createElementNS(ns, 'svg');
+    var s = size || '18px';
     svg.setAttribute('viewBox', '0 0 24 24');
-    svg.style.display = 'block';
-    svg.style.width = size || '18px';
-    svg.style.height = size || '18px';
+    svg.setAttribute('width', s);
+    svg.setAttribute('height', s);
 
     if (type === 'star_fill') {
-        svg.style.minWidth = '2em';
-        svg.style.minHeight = '2em';
-        svg.style.flex = '0 0 auto';
+        svg.setAttribute('style', 'display:block;width:2em;height:2em;min-width:2em;min-height:2em;flex:0 0 auto;');
         var p = document.createElementNS(ns, 'path');
         p.setAttribute('fill', 'currentColor');
         p.setAttribute('d', 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z');
@@ -868,6 +866,7 @@ function buildSvgIcon(type, size) {
         return $(svg);
     }
 
+    svg.setAttribute('style', 'display:block;width:' + s + ';height:' + s + ';');
     svg.setAttribute('fill', 'none');
     svg.setAttribute('stroke', 'currentColor');
     svg.setAttribute('stroke-width', '2');
@@ -1004,7 +1003,7 @@ function MyTopComponent() {
             }
             var list = domEl('div', '', { padding: '0 16px 120px' });
             units.forEach(function (u) {
-                var firstId = u.ids[0];
+                var firstId = u.ids;
                 var firstItem = top[firstId] || {};
                 var placeText = u.place ? '#' + u.place : '—';
                 var src = posterUrl(u.poster, 'w200');

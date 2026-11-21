@@ -1,8 +1,16 @@
 function MyTopComponent() {
-    var html = $('<div class="my-top-page" style="height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;position:relative;"></div>');
+    var html = $('<div class="my-top-page" style="height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;"></div>');
     var deleteMode = false;
     var lastScrollTop = 0;
     var headerHidden = false;
+
+    function getNativeBg() {
+        try {
+            var bg = window.getComputedStyle(document.body).backgroundColor;
+            if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
+        } catch (e) {}
+        return '#1d1f20';
+    }
 
     function buildContent() {
         try {
@@ -15,10 +23,8 @@ function MyTopComponent() {
                 position: 'sticky',
                 top: '0',
                 zIndex: 20,
-                background: 'rgba(18, 18, 22, 0.96)',
-                backdropFilter: 'blur(8px)',
-                borderBottom: '1px solid rgba(255,255,255,0.08)',
-                transition: 'transform 0.28s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.25s ease',
+                background: getNativeBg(),
+                transition: 'transform 0.22s ease, opacity 0.2s ease',
                 transform: headerHidden ? 'translateY(-100%)' : 'translateY(0)',
                 opacity: headerHidden ? '0' : '1',
                 pointerEvents: headerHidden ? 'none' : 'auto'
@@ -46,7 +52,7 @@ function MyTopComponent() {
             onceClick(btnEnrich, function () { enrichTop(buildContent); });
             buttons.append(btnEnrich);
 
-            var btnDelete = $('<div class="full-start__button selector" style="flex:1;min-width:110px;' + (deleteMode ? 'background:#d9383a;color:#fff;border-color:#ff5c5e;' : '') + '"><span>' + (deleteMode ? 'Готово ✕' : 'Удалить') + '</span></div>');
+            var btnDelete = $('<div class="full-start__button selector" style="flex:1;min-width:110px;' + (deleteMode ? 'background:#d9383a;color:#fff;' : '') + '"><span>' + (deleteMode ? 'Готово ✕' : 'Удалить') + '</span></div>');
             onceClick(btnDelete, function () {
                 deleteMode = !deleteMode;
                 headerHidden = false;
@@ -69,27 +75,25 @@ function MyTopComponent() {
 
             header.append(buttons);
 
-            var counterText = 'Элементов: <b>' + units.length + '</b>';
-            if (deleteMode) {
-                counterText += ' • <span style="color:#ff5c5e;font-weight:600;">Режим удаления: нажми на фильм или ✕</span>';
-            }
-            header.append('<div style="margin:0 20px 14px;padding:10px 12px;background:rgba(0,0,0,0.3);border-radius:8px;color:#8a8a95;font-size:12px;">' + counterText + '</div>');
+            var counterHtml = 'Элементов: <b>' + units.length + '</b>';
+            if (deleteMode) counterHtml += ' • <span style="color:#ff5c5e;">Режим удаления</span>';
+            header.append('<div style="margin:0 20px 20px;padding:12px;background:rgba(0,0,0,0.3);border-radius:8px;color:#8a8a95;font-size:12px;">' + counterHtml + '</div>');
 
             html.append(header);
 
             html.off('scroll.curtain').on('scroll.curtain', function () {
                 var st = html.scrollTop();
-                if (st < 40) {
+                if (st <= 15) {
                     if (headerHidden) {
                         headerHidden = false;
                         header.css({ transform: 'translateY(0)', opacity: '1', pointerEvents: 'auto' });
                     }
-                } else if (st > lastScrollTop + 12) {
+                } else if (st > lastScrollTop + 8) {
                     if (!headerHidden) {
                         headerHidden = true;
                         header.css({ transform: 'translateY(-100%)', opacity: '0', pointerEvents: 'none' });
                     }
-                } else if (st < lastScrollTop - 12) {
+                } else if (st < lastScrollTop - 2) {
                     if (headerHidden) {
                         headerHidden = false;
                         header.css({ transform: 'translateY(0)', opacity: '1', pointerEvents: 'auto' });
@@ -98,12 +102,11 @@ function MyTopComponent() {
                 lastScrollTop = st;
             });
 
-            if (!units.length) {
-                html.append('<div style="padding:40px;text-align:center;color:#8a8a95;">Список пуст</div>');
-                return;
-            }
+            if (!units.length) { html.append('<div style="padding:40px;text-align:center;color:#8a8a95;">Список пуст</div>'); return; }
             var list = $('<div style="padding:0 20px 120px;"></div>');
             units.forEach(function (u) {
+                var firstId = u.ids[0];
+                var firstItem = top[firstId] || {};
                 var placeText = u.place ? '#' + u.place : '—';
                 var src = posterUrl(u.poster, 'w200');
                 var row = $('<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06);"></div>');
@@ -129,37 +132,37 @@ function MyTopComponent() {
                 }
                 onceClick(posterWrap, function () {
                     if (deleteMode) { deleteCurrentUnit(); return; }
-                    openMovieCard(top[u.ids]);
+                    openMovieCard(firstItem);
                 });
                 row.append(posterWrap);
 
                 var info = $('<div>').css({ flex: 1, minWidth: 0, cursor: 'pointer' });
                 if (u.isCollection) info.append($('<div>').css({ color: '#ffdd55', fontSize: '10px', fontWeight: '700', letterSpacing: '0.5px', marginBottom: '2px' }).text('КОЛЛЕКЦИЯ × ' + u.count));
                 var titleDiv = $('<div>').css({ fontSize: '16px', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }).text(u.title);
-                if (!u.isCollection && top[u.ids].isSeries) titleDiv.append(' ').append($('<span>').css({ color: '#ffdd55', fontSize: '11px' }).text('СЕРИАЛ'));
+                if (!u.isCollection && firstItem.isSeries) titleDiv.append(' ').append($('<span>').css({ color: '#ffdd55', fontSize: '11px' }).text('СЕРИАЛ'));
                 info.append(titleDiv);
                 if (u.isCollection) {
-                    var parts = u.ids.map(function (id) { return top[id].title + ' (' + top[id].year + ')'; }).join(' · ');
+                    var parts = u.ids.map(function (id) { return (top[id] ? top[id].title + ' (' + top[id].year + ')' : id); }).join(' · ');
                     info.append($('<div>').css({ fontSize: '12px', color: '#8a8a95', marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }).text(parts));
                 } else {
-                    info.append($('<div>').css({ fontSize: '13px', color: '#8a8a95', marginTop: '4px' }).text(top[u.ids].year || '—'));
+                    info.append($('<div>').css({ fontSize: '13px', color: '#8a8a95', marginTop: '4px' }).text(firstItem.year || '—'));
                 }
                 if (u.note) info.append($('<div>').css({ fontSize: '12px', color: '#8a8a95', marginTop: '4px', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }).text(u.note));
                 onceClick(info, function () {
                     if (deleteMode) { deleteCurrentUnit(); return; }
-                    openMovieCard(top[u.ids]);
+                    openMovieCard(firstItem);
                 });
                 row.append(info);
 
                 if (deleteMode) {
-                    var delBtn = $('<div class="full-start__button selector" style="padding:8px 14px;background:rgba(217,56,58,0.22);border:1px solid #ff5c5e;color:#ff5c5e;border-radius:8px;"><span style="font-size:15px;font-weight:700;">✕</span></div>');
+                    var delBtn = $('<div class="full-start__button selector" style="padding:8px 14px;background:rgba(217,56,58,0.22);border:1px solid #ff5c5e;color:#ff5c5e;"><span style="font-size:15px;font-weight:700;">✕</span></div>');
                     onceClick(delBtn, deleteCurrentUnit);
                     row.append(delBtn);
                 } else {
                     var noteBtn = $('<div class="full-start__button selector" style="padding:8px 12px;"><span style="font-size:12px;">Заметка</span></div>');
                     onceClick(noteBtn, function () {
                         if (u.isCollection) editCollectionNotes(u.ids, buildContent);
-                        else editNote(u.ids, buildContent);
+                        else editNote(firstId, buildContent);
                     });
                     row.append(noteBtn);
                 }

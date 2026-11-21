@@ -1,11 +1,28 @@
 function MyTopComponent() {
-    var html = $('<div class="my-top-page" style="height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;"></div>');
+    var html = $('<div class="my-top-page" style="height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;position:relative;"></div>');
+    var deleteMode = false;
+    var lastScrollTop = 0;
+    var headerHidden = false;
 
     function buildContent() {
         try {
+            var savedScroll = html.scrollTop();
             html.empty();
             var top = getTop();
             var units = getSortedUnits();
+
+            var header = $('<div>').css({
+                position: 'sticky',
+                top: '0',
+                zIndex: 20,
+                background: 'rgba(18, 18, 22, 0.96)',
+                backdropFilter: 'blur(8px)',
+                borderBottom: '1px solid rgba(255,255,255,0.08)',
+                transition: 'transform 0.28s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.25s ease',
+                transform: headerHidden ? 'translateY(-100%)' : 'translateY(0)',
+                opacity: headerHidden ? '0' : '1',
+                pointerEvents: headerHidden ? 'none' : 'auto'
+            });
 
             var buttons = $('<div style="display:flex;gap:8px;padding:20px 20px 12px;flex-wrap:wrap;"></div>');
 
@@ -29,6 +46,14 @@ function MyTopComponent() {
             onceClick(btnEnrich, function () { enrichTop(buildContent); });
             buttons.append(btnEnrich);
 
+            var btnDelete = $('<div class="full-start__button selector" style="flex:1;min-width:110px;' + (deleteMode ? 'background:#d9383a;color:#fff;border-color:#ff5c5e;' : '') + '"><span>' + (deleteMode ? 'Готово ✕' : 'Удалить') + '</span></div>');
+            onceClick(btnDelete, function () {
+                deleteMode = !deleteMode;
+                headerHidden = false;
+                buildContent();
+            });
+            buttons.append(btnDelete);
+
             var btnRec = $('<div class="full-start__button selector" style="flex:1;min-width:110px;"><span>Рекомендации</span></div>');
             onceClick(btnRec, function () {
                 if (!getLLMSettings().apiUrl) { notify('Укажи API в настройках'); openLLMSettings(buildContent); return; }
@@ -42,27 +67,72 @@ function MyTopComponent() {
             onceClick(btnSettings, function () { openLLMSettings(buildContent); });
             buttons.append(btnSettings);
 
-            html.append(buttons);
-            html.append('<div style="margin:0 20px 20px;padding:12px;background:rgba(0,0,0,0.3);border-radius:8px;color:#8a8a95;font-size:12px;">Элементов: <b>' + units.length + '</b></div>');
+            header.append(buttons);
 
-            if (!units.length) { html.append('<div style="padding:40px;text-align:center;color:#8a8a95;">Список пуст</div>'); return; }
+            var counterText = 'Элементов: <b>' + units.length + '</b>';
+            if (deleteMode) {
+                counterText += ' • <span style="color:#ff5c5e;font-weight:600;">Режим удаления: нажми на фильм или ✕</span>';
+            }
+            header.append('<div style="margin:0 20px 14px;padding:10px 12px;background:rgba(0,0,0,0.3);border-radius:8px;color:#8a8a95;font-size:12px;">' + counterText + '</div>');
 
+            html.append(header);
+
+            html.off('scroll.curtain').on('scroll.curtain', function () {
+                var st = html.scrollTop();
+                if (st < 40) {
+                    if (headerHidden) {
+                        headerHidden = false;
+                        header.css({ transform: 'translateY(0)', opacity: '1', pointerEvents: 'auto' });
+                    }
+                } else if (st > lastScrollTop + 12) {
+                    if (!headerHidden) {
+                        headerHidden = true;
+                        header.css({ transform: 'translateY(-100%)', opacity: '0', pointerEvents: 'none' });
+                    }
+                } else if (st < lastScrollTop - 12) {
+                    if (headerHidden) {
+                        headerHidden = false;
+                        header.css({ transform: 'translateY(0)', opacity: '1', pointerEvents: 'auto' });
+                    }
+                }
+                lastScrollTop = st;
+            });
+
+            if (!units.length) {
+                html.append('<div style="padding:40px;text-align:center;color:#8a8a95;">Список пуст</div>');
+                return;
+            }
             var list = $('<div style="padding:0 20px 120px;"></div>');
             units.forEach(function (u) {
                 var placeText = u.place ? '#' + u.place : '—';
                 var src = posterUrl(u.poster, 'w200');
                 var row = $('<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06);"></div>');
+
+                function deleteCurrentUnit() {
+                    removeFromTopAndViewed(u.ids);
+                    notify('Удалено: «' + u.title + '»');
+                    buildContent();
+                }
+
                 var placeBtn = $('<div>').css({ fontSize: '22px', fontWeight: '700', color: '#ffdd55', minWidth: '44px', textAlign: 'center', cursor: 'pointer', userSelect: 'none' }).text(placeText);
-                onceClick(placeBtn, function () { editPlace(u.ids, buildContent); });
+                onceClick(placeBtn, function () {
+                    if (deleteMode) { deleteCurrentUnit(); return; }
+                    editPlace(u.ids, buildContent);
+                });
                 row.append(placeBtn);
+
                 var posterWrap = $('<div>').css({ width: '54px', height: '80px', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', flexShrink: 0, cursor: 'pointer', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' });
                 if (src) {
                     var img = $('<img>').attr('src', src).css({ width: '100%', height: '100%', objectFit: 'cover', display: 'block' });
                     img.on('error', function () { var d = 'https://tmdb.org' + String(u.poster).replace(/^\/+/, ''); if (img.attr('src') !== d) img.attr('src', d); else img.remove(); });
                     posterWrap.append(img);
                 }
-                onceClick(posterWrap, function () { openMovieCard(top[u.ids]); });
+                onceClick(posterWrap, function () {
+                    if (deleteMode) { deleteCurrentUnit(); return; }
+                    openMovieCard(top[u.ids]);
+                });
                 row.append(posterWrap);
+
                 var info = $('<div>').css({ flex: 1, minWidth: 0, cursor: 'pointer' });
                 if (u.isCollection) info.append($('<div>').css({ color: '#ffdd55', fontSize: '10px', fontWeight: '700', letterSpacing: '0.5px', marginBottom: '2px' }).text('КОЛЛЕКЦИЯ × ' + u.count));
                 var titleDiv = $('<div>').css({ fontSize: '16px', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }).text(u.title);
@@ -75,23 +145,43 @@ function MyTopComponent() {
                     info.append($('<div>').css({ fontSize: '13px', color: '#8a8a95', marginTop: '4px' }).text(top[u.ids].year || '—'));
                 }
                 if (u.note) info.append($('<div>').css({ fontSize: '12px', color: '#8a8a95', marginTop: '4px', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }).text(u.note));
-                onceClick(info, function () { openMovieCard(top[u.ids]); });
-                row.append(info);
-                var noteBtn = $('<div class="full-start__button selector" style="padding:8px 12px;"><span style="font-size:12px;">Заметка</span></div>');
-                onceClick(noteBtn, function () {
-                    if (u.isCollection) editCollectionNotes(u.ids, buildContent);
-                    else editNote(u.ids, buildContent);
+                onceClick(info, function () {
+                    if (deleteMode) { deleteCurrentUnit(); return; }
+                    openMovieCard(top[u.ids]);
                 });
-                row.append(noteBtn);
+                row.append(info);
+
+                if (deleteMode) {
+                    var delBtn = $('<div class="full-start__button selector" style="padding:8px 14px;background:rgba(217,56,58,0.22);border:1px solid #ff5c5e;color:#ff5c5e;border-radius:8px;"><span style="font-size:15px;font-weight:700;">✕</span></div>');
+                    onceClick(delBtn, deleteCurrentUnit);
+                    row.append(delBtn);
+                } else {
+                    var noteBtn = $('<div class="full-start__button selector" style="padding:8px 12px;"><span style="font-size:12px;">Заметка</span></div>');
+                    onceClick(noteBtn, function () {
+                        if (u.isCollection) editCollectionNotes(u.ids, buildContent);
+                        else editNote(u.ids, buildContent);
+                    });
+                    row.append(noteBtn);
+                }
+
                 list.append(row);
             });
             html.append(list);
+
+            if (savedScroll > 0) html.scrollTop(savedScroll);
         } catch (e) {
             html.append('<div style="padding:40px;text-align:center;color:#ff6666;">Ошибка: ' + e.message + '</div>');
         }
     }
 
-    this.create = function () { syncWithFavorites(true); buildContent(); return html; };
+    this.create = function () {
+        deleteMode = false;
+        headerHidden = false;
+        lastScrollTop = 0;
+        syncWithFavorites(true);
+        buildContent();
+        return html;
+    };
     this.start = function () {};
     this.render = function () { return html; };
     this.destroy = function () { html.remove(); };

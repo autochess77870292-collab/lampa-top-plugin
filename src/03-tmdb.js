@@ -1,3 +1,14 @@
+(function () {
+    var ver = 'V2';
+    function showVer() {
+        setTimeout(function () { notify(ver); }, 600);
+    }
+    if (window.appready) showVer();
+    else if (window.Lampa && Lampa.Listener) {
+        Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') showVer(); });
+    }
+})();
+
 function fetchTMDB(id, onSuccess, onFail) {
     try {
         var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
@@ -66,7 +77,6 @@ function searchTMDBItem(item, callback) {
         return all;
     }
 
-    // Способ 1: через Lampa.Api.sources.tmdb.list (самый прямой и нативный для TMDB в Lampa)
     function tryTmdbList(ti) {
         var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
         if (!tmdb || typeof tmdb.list !== 'function' || ti >= types.length) {
@@ -91,7 +101,6 @@ function searchTMDBItem(item, callback) {
         }
     }
 
-    // Способ 2: через Lampa.Api.search
     function tryApiSearch() {
         if (!window.Lampa || !Lampa.Api || typeof Lampa.Api.search !== 'function') {
             callback(null);

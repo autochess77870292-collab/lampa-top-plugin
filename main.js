@@ -97,6 +97,51 @@ function addToTop(card) {
     notify('"' + info.title + '" → в топе (' + Object.keys(top).length + ')');
 }
 
+function removeFromTopAndViewed(ids) {
+    var top = getTop();
+    var idStrs = ids.map(String);
+
+    ids.forEach(function (id) {
+        delete top[id];
+        delete top[String(id)];
+    });
+    saveTop(top);
+
+    var units = getUnits();
+    var placed = units.filter(function (u) { return u.place; }).sort(function (a, b) { return a.place - b.place; });
+    placed.forEach(function (u, i) {
+        u.ids.forEach(function (id) {
+            if (top[id]) top[id].place = i + 1;
+        });
+    });
+    saveTop(top);
+
+    try {
+        if (window.Lampa && Lampa.Favorite) {
+            ids.forEach(function (id) {
+                var numId = parseInt(id, 10) || id;
+                if (typeof Lampa.Favorite.remove === 'function') {
+                    Lampa.Favorite.remove('viewed', { id: numId });
+                } else if (typeof Lampa.Favorite.toggle === 'function') {
+                    Lampa.Favorite.toggle('viewed', { id: numId });
+                }
+            });
+        }
+        var fav = parseJSON(rawGet('favorite', ''), null);
+        if (fav && fav.viewed) {
+            if (Array.isArray(fav.viewed)) {
+                fav.viewed = fav.viewed.filter(function (v) { return idStrs.indexOf(String(v)) === -1; });
+            } else if (typeof fav.viewed === 'object') {
+                idStrs.forEach(function (sid) { delete fav.viewed[sid]; });
+            }
+            if (Array.isArray(fav.card)) {
+                fav.card = fav.card.filter(function (c) { return !c || idStrs.indexOf(String(c.id)) === -1; });
+            }
+            rawSet('favorite', JSON.stringify(fav));
+        }
+    } catch (e) { console.error('[MyTop] remove viewed err:', e); }
+}
+
 function syncWithFavorites(silent) {
     try {
         var fav = parseJSON(rawGet('favorite', ''), null);

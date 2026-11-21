@@ -615,22 +615,37 @@ function importFromList(text, onDone) {
     if (!queue.length) { notify('Нет фильмов для импорта'); if (onDone) onDone(); return; }
 
     var top = getTop();
-    var wasEmpty = Object.keys(top).length === 0;
+    var hasAnyPlace = Object.keys(top).some(function (id) { return top[id] && top[id].place; });
+    var wasEmpty = (Object.keys(top).length === 0) || !hasAnyPlace;
     var baseTime = Date.now();
     var idx = 0, added = 0, skipped = 0, notFound = 0;
     var total = queue.length;
+    var importedOrder = [];
     notify('Импорт: 0/' + total);
 
     function next() {
         if (idx >= total) {
-            if (wasEmpty) {
-                var units = getUnits();
-                units.sort(function (a, b) { return (a.addedAt || 0) - (b.addedAt || 0); });
-                units.forEach(function (u, i) {
-                    u.ids.forEach(function (id) { if (top[id]) top[id].place = i + 1; });
-                });
-            }
             saveTop(top);
+            if (wasEmpty && importedOrder.length) {
+                var units = getUnits();
+                var placedCols = {};
+                var placeNum = 1;
+                importedOrder.forEach(function (id) {
+                    var u = null;
+                    for (var k = 0; k < units.length; k++) {
+                        if (units[k].ids.map(String).indexOf(String(id)) !== -1) { u = units[k]; break; }
+                    }
+                    if (u) {
+                        var key = u.isCollection ? 'col_' + u.collectionId : 'id_' + id;
+                        if (!placedCols[key]) {
+                            placedCols[key] = true;
+                            u.ids.forEach(function (uid) { if (top[uid]) top[uid].place = placeNum; });
+                            placeNum++;
+                        }
+                    }
+                });
+                saveTop(top);
+            }
             var msg = 'Импорт: +' + added;
             if (skipped) msg += ', дубли: ' + skipped;
             if (notFound) msg += ', не найдено: ' + notFound;
@@ -646,6 +661,7 @@ function importFromList(text, onDone) {
             if (!info || !info.id) { notFound++; setTimeout(next, 200); return; }
             if (top[info.id]) {
                 if (item.note && !top[info.id].note) top[info.id].note = item.note;
+                importedOrder.push(info.id);
                 skipped++; setTimeout(next, 200); return;
             }
             info.place = null;
@@ -653,9 +669,9 @@ function importFromList(text, onDone) {
             info.source = 'import';
             info.addedAt = baseTime + idx;
             top[info.id] = info;
+            importedOrder.push(info.id);
             added++;
 
-            // Добавляем в "Просмотренные" Lampa
             try {
                 if (window.Lampa && Lampa.Favorite && typeof Lampa.Favorite.add === 'function') {
                     Lampa.Favorite.add('viewed', card);
@@ -693,6 +709,7 @@ function openImportDialog(onDone) {
     });
     setTimeout(function () { try { ta.focus(); } catch (e) {} }, 100);
 }
+
     // ===== src/06-llm.js =====
 function buildLLMPrompt() {
     var text = buildTopText(true);

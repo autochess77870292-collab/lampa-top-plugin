@@ -192,8 +192,9 @@ function searchTMDBItem(item, callback) {
     }
 
     function loadFull(best, type) {
+        if (!best || !best.id) { callback(null); return; }
         var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
-        if (tmdb && typeof tmdb.full === 'function' && best && best.id) {
+        if (tmdb && typeof tmdb.full === 'function') {
             try {
                 tmdb.full({ id: best.id, method: type, card: {}, language: 'ru-RU' }, function (full) {
                     callback((full && (full.movie || full)) || best);
@@ -206,18 +207,56 @@ function searchTMDBItem(item, callback) {
         callback(best);
     }
 
-    if (window.Lampa && Lampa.Api && typeof Lampa.Api.search === 'function') {
-        Lampa.Api.search({ query: item.title }, function (res) {
-            var all = [];
-            if (res) {
-                if (Array.isArray(res)) {
-                    res.forEach(function (group) {
-                        if (group && Array.isArray(group.results)) all = all.concat(group.results);
-                    });
-                } else if (Array.isArray(res.results)) {
-                    all = res.results;
+    function extractResults(res) {
+        var all = [];
+        if (!res) return all;
+        if (Array.isArray(res)) {
+            res.forEach(function (group) {
+                if (group && Array.isArray(group.results)) all = all.concat(group.results);
+                else if (group && group.id) all.push(group);
+            });
+        } else if (Array.isArray(res.results)) {
+            all = res.results;
+        }
+        return all;
+    }
+
+    // Способ 1: через Lampa.Api.sources.tmdb.list (самый прямой и нативный для TMDB в Lampa)
+    function tryTmdbList(ti) {
+        var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
+        if (!tmdb || typeof tmdb.list !== 'function' || ti >= types.length) {
+            tryApiSearch();
+            return;
+        }
+        var type = types[ti];
+        var url = 'search/' + type + '?query=' + encodeURIComponent(item.title) + '&language=ru-RU';
+        try {
+            tmdb.list({ url: url }, function (res) {
+                var results = extractResults(res);
+                if (results.length) {
+                    loadFull(pickBest(results), type);
+                } else {
+                    tryTmdbList(ti + 1);
                 }
-            }
+            }, function () {
+                tryTmdbList(ti + 1);
+            });
+        } catch (e) {
+            tryTmdbList(ti + 1);
+        }
+    }
+
+    // Способ 2: через Lampa.Api.search
+    function tryApiSearch() {
+        if (!window.Lampa || !Lampa.Api || typeof Lampa.Api.search !== 'function') {
+            callback(null);
+            return;
+        }
+        var finished = false;
+        function handleRes(res) {
+            if (finished) return;
+            finished = true;
+            var all = extractResults(res);
             var filtered = all.filter(function (r) {
                 var isTV = !!(r.name || r.first_air_date || r.media_type === 'tv');
                 return item.isSeries ? isTV : !isTV;
@@ -229,29 +268,19 @@ function searchTMDBItem(item, callback) {
             } else {
                 callback(null);
             }
-        }, function () {
-            callback(null);
-        });
-        return;
-    }
-
-    var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
-    if (tmdb && typeof tmdb.list === 'function') {
-        function tryType(ti) {
-            if (ti >= types.length) { callback(null); return; }
-            var type = types[ti];
-            var url = 'search/' + type + '?query=' + encodeURIComponent(item.title) + '&language=ru-RU' + (item.year ? '&year=' + item.year : '');
-            tmdb.list({ url: url }, function (res) {
-                var results = (res && res.results) ? res.results : [];
-                if (!results.length) { tryType(ti + 1); return; }
-                loadFull(pickBest(results), type);
-            }, function () { tryType(ti + 1); });
         }
-        tryType(0);
-        return;
+        try {
+            Lampa.Api.search({
+                query: item.title,
+                onComplete: handleRes,
+                onError: function () { if (!finished) { finished = true; callback(null); } }
+            }, handleRes, function () { if (!finished) { finished = true; callback(null); } });
+        } catch (e) {
+            if (!finished) { finished = true; callback(null); }
+        }
     }
 
-    callback(null);
+    tryTmdbList(0);
 }
 
 function searchTMDBForRecommendation(rec, done) {

@@ -1,5 +1,5 @@
 (function () {
-    var ver = 'V2';
+    var ver = 'V3';
     function showVer() {
         setTimeout(function () { notify(ver); }, 600);
     }
@@ -66,6 +66,9 @@ function searchTMDBItem(item, callback) {
     function extractResults(res) {
         var all = [];
         if (!res) return all;
+        if (typeof res === 'string') {
+            try { res = JSON.parse(res); } catch (e) { return all; }
+        }
         if (Array.isArray(res)) {
             res.forEach(function (group) {
                 if (group && Array.isArray(group.results)) all = all.concat(group.results);
@@ -77,6 +80,45 @@ function searchTMDBItem(item, callback) {
         return all;
     }
 
+    // Способ 1: Прямой запрос через родной Lampa.TMDB.api + Lampa.Network (использует прокси Lampa)
+    function tryNativeTmdbApi(ti) {
+        if (!window.Lampa || !Lampa.TMDB || typeof Lampa.TMDB.api !== 'function' || ti >= types.length) {
+            tryTmdbList(0);
+            return;
+        }
+        var type = types[ti];
+        var key = typeof Lampa.TMDB.key === 'function' ? Lampa.TMDB.key() : '';
+        var lang = (Lampa.Storage && Lampa.Storage.field) ? Lampa.Storage.field('language') : 'ru';
+        var path = 'search/' + type + '?api_key=' + key + '&language=' + lang + '&query=' + encodeURIComponent(item.title);
+        var url = Lampa.TMDB.api(path);
+
+        try {
+            if (Lampa.Network && typeof Lampa.Network.silent === 'function') {
+                Lampa.Network.silent(url, function (res) {
+                    var results = extractResults(res);
+                    if (results.length) loadFull(pickBest(results), type);
+                    else tryNativeTmdbApi(ti + 1);
+                }, function () {
+                    tryNativeTmdbApi(ti + 1);
+                });
+                return;
+            }
+            if (typeof Lampa.Reguest === 'function') {
+                var net = new Lampa.Reguest();
+                net.silent(url, function (res) {
+                    var results = extractResults(res);
+                    if (results.length) loadFull(pickBest(results), type);
+                    else tryNativeTmdbApi(ti + 1);
+                }, function () {
+                    tryNativeTmdbApi(ti + 1);
+                });
+                return;
+            }
+        } catch (e) {}
+        tryTmdbList(0);
+    }
+
+    // Способ 2: через Lampa.Api.sources.tmdb.list
     function tryTmdbList(ti) {
         var tmdb = (window.Lampa && Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb) || null;
         if (!tmdb || typeof tmdb.list !== 'function' || ti >= types.length) {
@@ -88,11 +130,8 @@ function searchTMDBItem(item, callback) {
         try {
             tmdb.list({ url: url }, function (res) {
                 var results = extractResults(res);
-                if (results.length) {
-                    loadFull(pickBest(results), type);
-                } else {
-                    tryTmdbList(ti + 1);
-                }
+                if (results.length) loadFull(pickBest(results), type);
+                else tryTmdbList(ti + 1);
             }, function () {
                 tryTmdbList(ti + 1);
             });
@@ -101,6 +140,7 @@ function searchTMDBItem(item, callback) {
         }
     }
 
+    // Способ 3: через Lampa.Api.search
     function tryApiSearch() {
         if (!window.Lampa || !Lampa.Api || typeof Lampa.Api.search !== 'function') {
             callback(null);
@@ -134,7 +174,7 @@ function searchTMDBItem(item, callback) {
         }
     }
 
-    tryTmdbList(0);
+    tryNativeTmdbApi(0);
 }
 
 function searchTMDBForRecommendation(rec, done) {

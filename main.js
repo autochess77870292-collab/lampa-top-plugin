@@ -198,7 +198,7 @@ function syncWithFavorites(silent) {
 function importFavorites(silent) { return syncWithFavorites(silent); }
     // ===== src/03-tmdb.js =====
 (function () {
-    var ver = 'V6';
+    var ver = 'V8';
     function showVer() {
         setTimeout(function () { notify(ver); }, 600);
     }
